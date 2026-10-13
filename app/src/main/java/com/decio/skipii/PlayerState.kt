@@ -59,6 +59,10 @@ class PlayerState(private val scope: CoroutineScope) {
         private set
     var durationMs by mutableLongStateOf(0L)
         private set
+    /** The player's playback speed (see [PlaybackSpeed]). */
+    var speed by mutableFloatStateOf(1f)
+        private set
+    var speedPanelOpen by mutableStateOf(false)
 
     init {
         // The service's stream recovery has no player event for its outcome: follow its state.
@@ -77,8 +81,11 @@ class PlayerState(private val scope: CoroutineScope) {
     /** Set once real frames have reported their size; the stream's own numbers no longer apply. */
     private var aspectFromFrames = false
 
-    /** The portrait player's shape: the video's own, within [StageMinAspect]..[StageMaxAspect]. */
-    val stageAspect: Float get() = videoAspect.coerceIn(StageMinAspect, StageMaxAspect)
+    /**
+     * The portrait player's shape: the video's own, within [StageMinAspect]..[StageMaxAspect];
+     * in audio only, the short strip that holds just the controls.
+     */
+    val stageAspect: Float get() = if (AudioOnly.enabled) AudioStageAspect else videoAspect.coerceIn(StageMinAspect, StageMaxAspect)
     var firstFrameRendered by mutableStateOf(false)
         private set
     /** What the decoder is really producing, e.g. "1920×1080 · H.264 · itag 299". */
@@ -150,6 +157,7 @@ class PlayerState(private val scope: CoroutineScope) {
         comments.clearFor(item.id)
         accountState = null
         inWatchLater = false
+        speedPanelOpen = false
         if (Account.signedIn) {
             scope.launch {
                 runCatching { InnerTube.videoState(item.id) }
@@ -430,6 +438,35 @@ class PlayerState(private val scope: CoroutineScope) {
         positionMs = player.currentPosition
     }
 
+    /** The ruler is moving: play at [value] now (remembering waits for [commitSpeed]). */
+    fun previewSpeed(value: Float) {
+        val player = controller ?: return
+        val s = PlaybackSpeed.snap(value)
+        if (player.playbackParameters.speed != s) player.setPlaybackSpeed(s)
+        speed = s
+    }
+
+    /**
+     * The ruler has landed on [value]. While remembering, it becomes the remembered speed —
+     * unless it is 1× coming from another speed, which ends remembering (Derek: "until the
+     * user resets it back to 1×").
+     */
+    fun commitSpeed(value: Float) {
+        previewSpeed(value)
+        val s = PlaybackSpeed.snap(value)
+        if (!PlaybackSpeed.remember) return
+        if (PlaybackSpeed.isNormal(s) && !PlaybackSpeed.isNormal(PlaybackSpeed.saved)) PlaybackSpeed.setRemember(false, 1f)
+        else PlaybackSpeed.save(s)
+    }
+
+    fun toggleRememberSpeed() = PlaybackSpeed.setRemember(!PlaybackSpeed.remember, speed)
+
+    /** Audio only for the whole app: the video track goes off (or back on) right away. */
+    fun setAudioOnly(on: Boolean) {
+        AudioOnly.set(on)
+        applyVideoTrack()
+    }
+
     /**
      * App left the screen: stop fetching video and keep only audio (saves data and battery);
      * back on screen, video resumes. Done through the player's track selection, so the
@@ -437,7 +474,7 @@ class PlayerState(private val scope: CoroutineScope) {
      */
     fun setBackground(background: Boolean) {
         wantBackground = background
-        applyBackground()
+        applyVideoTrack()
     }
 
     /**
@@ -448,13 +485,14 @@ class PlayerState(private val scope: CoroutineScope) {
      */
     private var wantBackground = false
 
-    private fun applyBackground() {
-        val background = wantBackground
+    /** Video is off in the background and whenever audio only is on. */
+    private fun applyVideoTrack() {
+        val off = wantBackground || AudioOnly.enabled
         val player = controller ?: return
-        if (player.trackSelectionParameters.disabledTrackTypes.contains(androidx.media3.common.C.TRACK_TYPE_VIDEO) == background) return
-        Log.i(TAG, if (background) "background: audio only" else "foreground: video on")
+        if (player.trackSelectionParameters.disabledTrackTypes.contains(androidx.media3.common.C.TRACK_TYPE_VIDEO) == off) return
+        Log.i(TAG, if (off) "video off (${if (AudioOnly.enabled) "audio only" else "background"})" else "video on")
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
-            .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_VIDEO, background)
+            .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_VIDEO, off)
             .build()
     }
 
@@ -478,7 +516,7 @@ class PlayerState(private val scope: CoroutineScope) {
      */
     internal fun onConnected() {
         syncFromPlayer()
-        applyBackground()
+        applyVideoTrack()
         controller?.videoSize?.let(::takeVideoSize)
         pendingStart?.let { pendingStart = null; startPlayback(it); return }
         val player = controller ?: return
@@ -511,6 +549,7 @@ class PlayerState(private val scope: CoroutineScope) {
         positionMs = player.currentPosition.coerceAtLeast(0L)
         bufferedMs = player.bufferedPosition.coerceAtLeast(0L)
         durationMs = player.duration.takeIf { it > 0 } ?: ((current?.durationSec ?: 0L) * 1000L)
+        speed = player.playbackParameters.speed
     }
 
     internal val listener = object : Player.Listener {

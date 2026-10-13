@@ -120,6 +120,28 @@ motion standard) and the approved mockup `docs/design/mockup.html` (open in a br
   Home quality: `WatchTimeReporter` (service) sends the web player's watch-time pings (10/20/30 s
   then every 40 s, plus pause/seek/move-on) — before, every video looked abandoned at 0 s. NOT
   verified (needs Derek's account): the pings being accepted and Home improving over days.
+- 2026-10-12: `BottomGestureGuard` (UiKit.kt) — an invisible touch-eating strip the height of the
+  bottom `mandatorySystemGestures` inset (32 dp on a Pixel) over the pages (MainActivity, below
+  the mini-player/tab bar) and the open player (only while `interactive`). Content still draws
+  under it, but a swipe home no longer nudges the list up first.
+- 0.5.19 (2026-10-13): full movies/TV are never shown in browse feeds (`InnerTube.isMovie`, next to
+  `isMembersOnly`): Primetime Channels (HBO Max, Shudder, Paramount+) and YouTube Movies carry a
+  YPC/MEDIA badge (old renderers) or, in lockups, a content-rating badge (R, TV-MA…) or a
+  BADGE_COMMERCE offer ("Try now"). Normal uploads use BADGE_COMMERCE only for "Fundraiser" — keep
+  that exception (next.json fixture). Tested by `moviesDropped` (movies.json, HBO Max's channel page).
+- 0.5.20 (2026-10-13, Derek approved mockup "Option B v2" in Drive): speed + audio-only buttons after
+  Save (separate, 16 dp corners; signed out they're the whole row). Speed (`PlaybackSpeed`, PlaybackModes.kt):
+  0.5–3× in 0.05 steps from a flickable ruler (`SpeedPanel.kt`, 12 dp per step, momentum then settles on a
+  step, tap jumps, 1× reset); per video unless "Remember for every video", then saved, button filled in, and
+  landing on 1× from another speed unticks it. The service's `SpeedKeeper` sets each NEW video's speed (same id
+  = fresh links/quality switch, kept). Ruler haptics = `SpeedHaptics`: Vibrator primitives as USAGE_TOUCH —
+  LOW_TICK 0.45 per step (steps <22 ms apart dropped), TICK 0.55 per 0.25×, CLICK 0.6 at 1×, CLICK 0.9 at the
+  ends; view feedback fallback. Verified on the emulator via `dumpsys vibrator_manager` only — the feel needs
+  Derek's Pixel. Audio only (`AudioOnly`, app-wide, persisted): video track disabled (with the background flag,
+  `applyVideoTrack`; service applies it at start too), stage = `AudioOnlyStage` (no picture: 78 dp play, 58 dp
+  skips, thick scrubber, SponsorBlock pill between the times) at `AudioStageAspect` 2.5; thumbnail under its
+  centred 16:9 window shows through as it shrinks; mini-player shows the thumbnail; no fullscreen (orientation
+  held portrait, no swipe-up).
 - Themes = Ledgii's (2026-10-05): Wallpaper (default on 12+), Cream Rose, Erica, Lilac Air, Jai,
   Pumpkin, Moonstone, Iris, Harbor + System/Light/Dark, picked in the account sheet's Appearance
   card (`ThemeSettings`, persisted). Palettes in Theme.kt are copied verbatim from
@@ -203,6 +225,7 @@ motion standard) and the approved mockup `docs/design/mockup.html` (open in a br
 - `SponsorBlock.kt` — hash-prefix lookups, cache, settings. Skipping happens in
   `PlaybackService.SponsorSkipper` (PlayerMessage at each segment start, 300 ms fade out → seek →
   450 ms fade in; logs "SponsorBlock: skipping …"). UI: scrubber marks, Ask pill, Skipped·Undo.
+- `PlaybackModes.kt` (`PlaybackSpeed`, `AudioOnly`) and `SpeedPanel.kt` (speed/audio buttons, ruler panel, `SpeedHaptics`).
 - `Sheets.kt` — long-press options, queue card + sheet, SponsorBlock settings.
 - `SecureStore.kt` (Keystore AES-GCM prefs), `SignIn.kt` (WebView sign-in, account sheet),
   `Feeds.kt` (`FeedState` paging, `LibraryData`, `FeedList`).

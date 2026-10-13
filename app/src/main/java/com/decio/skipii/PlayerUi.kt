@@ -2,6 +2,8 @@ package com.decio.skipii
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
@@ -102,6 +104,8 @@ internal val MiniThumbRadius = 17.dp
  */
 internal const val StageMinAspect = 0.8f
 internal const val StageMaxAspect = 2.4f
+/** Audio only: the stage is a short strip holding just the controls (~164 dp on a Pixel). */
+internal const val AudioStageAspect = 2.5f
 /** Morph progress after which the details and tint start fading in (tuning dial). */
 private const val DetailsFadeStart = 0.55f
 
@@ -246,7 +250,8 @@ fun PlayerScreen(
                                 SubscribeButton(subscribed, onClick = state::toggleSubscribe)
                             }
                         }
-                        if (state.accountState != null) AccountActions(state)
+                        PlayerActions(state)
+                        SpeedPanel(state)
                         QueueCard(state, onOpen = { state.sheet = PlayerSheet.Queue })
                         CommentsCard(state.comments, onOpen = { state.sheet = PlayerSheet.Comments })
                     }
@@ -266,6 +271,9 @@ fun PlayerScreen(
                 }
             }
         }
+        // Swiping home from the bottom edge never scrolls the details (open player only: while
+        // collapsing, touches must still fall through to the mini-player).
+        if (interactive) BottomGestureGuard(Modifier.align(Alignment.BottomCenter))
         // The mini-player's title and buttons travel with the shrinking video and fade in as
         // it lands, so the page turns into the mini-player rather than flying to one.
         MorphingMiniDetails(state, morph)
@@ -301,75 +309,88 @@ private fun VideoStage(state: PlayerState, morph: PlayerMorph, onCollapse: () ->
     // anything else drives the morph.
     var decided by remember { mutableStateOf(false) }
     var pulling by remember { mutableStateOf(false) }
-    VideoContent(
-        state = state,
-        fullscreen = false,
-        interactive = interactive,
-        // A tap on the shrinking video brings the player straight back.
-        onInactiveTap = { state.expanded = true },
-        onCollapse = onCollapse,
-        onToggleFullscreen = onFullscreen,
-        // Controls appear only once the video has nearly landed, so they never ride the morph.
-        controlsAlpha = { ramp(morph.progress.value, 0.7f) },
-        modifier = Modifier
-            .padding(horizontal = StageSideGap)
-            .fillMaxWidth()
-            .aspectRatio(aspect)
-            .graphicsLayer {
-                // Rubber band: up to 6% bigger, ever more slowly, growing down from the top edge.
-                val k = 1f + 0.06f * (1f - exp(-pullUp.value / (pullDistance * 1.5f)))
-                scaleX = k
-                scaleY = k
-                transformOrigin = TransformOrigin(0.5f, 0f)
+    val stage = Modifier
+        .padding(horizontal = StageSideGap)
+        .fillMaxWidth()
+        .aspectRatio(aspect)
+        .graphicsLayer {
+            // Rubber band: up to 6% bigger, ever more slowly, growing down from the top edge.
+            val k = 1f + 0.06f * (1f - exp(-pullUp.value / (pullDistance * 1.5f)))
+            scaleX = k
+            scaleY = k
+            transformOrigin = TransformOrigin(0.5f, 0f)
+        }
+        // Container transform: at progress 0 the video's centred 16:9 part sits exactly
+        // on the mini-player's thumbnail (scale, position and corner radius); at 1 the
+        // whole stage is home.
+        .graphicsLayer {
+            val g = morph.geometry
+            val p = morph.progress.value
+            if (g != null) {
+                val f = g.videoFrame(size, p)
+                scaleX = f.scale
+                scaleY = f.scale
+                transformOrigin = TransformOrigin(0f, 0f)
+                translationX = f.offset.x
+                translationY = f.offset.y
+                // Radius in layer space: divided by the scale so the small version
+                // shows the thumbnail's 17 dp corners, not a shrunken 28 dp.
+                shape = RoundRectClip(f.window, lerpF(g.thumbRadius / f.startScale, g.stageRadius, p.coerceIn(0f, 1f)))
+            } else {
+                shape = RoundedCornerShape(StageRadius)
             }
-            // Container transform: at progress 0 the video's centred 16:9 part sits exactly
-            // on the mini-player's thumbnail (scale, position and corner radius); at 1 the
-            // whole stage is home.
-            .graphicsLayer {
-                val g = morph.geometry
-                val p = morph.progress.value
-                if (g != null) {
-                    val f = g.videoFrame(size, p)
-                    scaleX = f.scale
-                    scaleY = f.scale
-                    transformOrigin = TransformOrigin(0f, 0f)
-                    translationX = f.offset.x
-                    translationY = f.offset.y
-                    // Radius in layer space: divided by the scale so the small version
-                    // shows the thumbnail's 17 dp corners, not a shrunken 28 dp.
-                    shape = RoundRectClip(f.window, lerpF(g.thumbRadius / f.startScale, g.stageRadius, p.coerceIn(0f, 1f)))
-                } else {
-                    shape = RoundedCornerShape(StageRadius)
+            clip = true
+            // Only while it floats mid-morph; landed, it is a flat edge-to-edge rectangle.
+            shadowElevation = 14.dp.toPx() * (1f - p).coerceIn(0f, 1f)
+            ambientShadowColor = Color.Black.copy(alpha = 0.25f)
+            spotShadowColor = Color.Black.copy(alpha = 0.35f)
+        }
+        .draggable(
+            state = rememberDraggableState { delta ->
+                if (!decided) {
+                    decided = true
+                    pulling = delta < 0f && state.expanded && !state.fullscreen && !AudioOnly.enabled && morph.progress.value >= 0.999f
                 }
-                clip = true
-                // Only while it floats mid-morph; landed, it is a flat edge-to-edge rectangle.
-                shadowElevation = 14.dp.toPx() * (1f - p).coerceIn(0f, 1f)
-                ambientShadowColor = Color.Black.copy(alpha = 0.25f)
-                spotShadowColor = Color.Black.copy(alpha = 0.35f)
-            }
-            .draggable(
-                state = rememberDraggableState { delta ->
-                    if (!decided) {
-                        decided = true
-                        pulling = delta < 0f && state.expanded && !state.fullscreen && morph.progress.value >= 0.999f
-                    }
-                    if (pulling) scope.launch(start = CoroutineStart.UNDISPATCHED) { pullUp.snapTo((pullUp.value - delta).coerceAtLeast(0f)) }
-                    else morph.dragBy(delta)
-                },
-                orientation = Orientation.Vertical,
-                onDragStopped = { velocity ->
-                    val wasPulling = pulling
-                    decided = false
-                    pulling = false
-                    if (wasPulling) {
-                        if (pullUp.value > pullDistance || velocity < -PlayerMorph.FLING_PX_PER_S) onFullscreen()
-                        if (reduced) pullUp.snapTo(0f) else pullUp.animateTo(0f, spring(dampingRatio = 0.8f, stiffness = 500f))
-                    } else {
-                        morph.settle(velocity, reduced)
-                    }
-                },
-            ),
-    )
+                if (pulling) scope.launch(start = CoroutineStart.UNDISPATCHED) { pullUp.snapTo((pullUp.value - delta).coerceAtLeast(0f)) }
+                else morph.dragBy(delta)
+            },
+            orientation = Orientation.Vertical,
+            onDragStopped = { velocity ->
+                val wasPulling = pulling
+                decided = false
+                pulling = false
+                if (wasPulling) {
+                    if (pullUp.value > pullDistance || velocity < -PlayerMorph.FLING_PX_PER_S) onFullscreen()
+                    if (reduced) pullUp.snapTo(0f) else pullUp.animateTo(0f, spring(dampingRatio = 0.8f, stiffness = 500f))
+                } else {
+                    morph.settle(velocity, reduced)
+                }
+            },
+        )
+    // Controls appear only once the video has nearly landed, so they never ride the morph.
+    val controlsAlpha = { ramp(morph.progress.value, 0.7f) }
+    if (AudioOnly.enabled) {
+        AudioOnlyStage(
+            state = state,
+            interactive = interactive,
+            onInactiveTap = { state.expanded = true },
+            progress = { morph.progress.value },
+            controlsAlpha = controlsAlpha,
+            modifier = stage,
+        )
+    } else {
+        VideoContent(
+            state = state,
+            fullscreen = false,
+            interactive = interactive,
+            // A tap on the shrinking video brings the player straight back.
+            onInactiveTap = { state.expanded = true },
+            onCollapse = onCollapse,
+            onToggleFullscreen = onFullscreen,
+            controlsAlpha = controlsAlpha,
+            modifier = stage,
+        )
+    }
 }
 
 /** How far a swipe up on the open video travels before it goes fullscreen on release. */
@@ -407,7 +428,38 @@ private fun SubscribeButton(subscribed: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** Connected like | dislike group and Save (Watch later), all synced to the account. */
+/**
+ * The action row: like | dislike and Save when signed in, then speed and audio only (always).
+ * It runs edge to edge inside so a long like count scrolls it sideways instead of squeezing
+ * the buttons, and the like sparks still have room to fly.
+ */
+@Composable
+private fun PlayerActions(state: PlayerState) {
+    Row(
+        Modifier
+            .padding(top = 14.dp)
+            .bleed(20.dp)
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (state.accountState != null) AccountActions(state)
+        SpeedButton(state)
+        AudioOnlyButton(state)
+    }
+}
+
+/** Lays the content out [x] wider on each side than the parent's padding allows. */
+private fun Modifier.bleed(x: androidx.compose.ui.unit.Dp) = layout { measurable, constraints ->
+    val extra = (x * 2).roundToPx()
+    val placeable = measurable.measure(
+        constraints.copy(minWidth = constraints.minWidth + extra, maxWidth = constraints.maxWidth + extra),
+    )
+    layout(placeable.width - extra, placeable.height) { placeable.place(-extra / 2, 0) }
+}
+
+/** Connected like | dislike group and Save (Watch later), all synced to the account; placed in [PlayerActions]' row. */
 @Composable
 private fun AccountActions(state: PlayerState) {
     val like = state.accountState?.like ?: LikeStatus.None
@@ -415,35 +467,33 @@ private fun AccountActions(state: PlayerState) {
     val likes = state.displayLikes
     val rising = likes >= lastLikes
     SideEffect { lastLikes = likes }
-    Row(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-            ActionPill(
-                icon = if (like == LikeStatus.Like) Icons.Rounded.ThumbUp else Icons.Outlined.ThumbUp,
-                label = likes.takeIf { it > 0 }?.let { formatCount(it) },
-                active = like == LikeStatus.Like,
-                flourish = Flourish.Pop,
-                labelRollsUp = rising,
-                shape = RoundedCornerShape(topStart = 22.dp, bottomStart = 22.dp, topEnd = 8.dp, bottomEnd = 8.dp),
-                description = "Like",
-            ) { state.setLike(LikeStatus.Like) }
-            ActionPill(
-                icon = if (like == LikeStatus.Dislike) Icons.Rounded.ThumbDown else Icons.Outlined.ThumbDown,
-                label = null,
-                active = like == LikeStatus.Dislike,
-                flourish = Flourish.Droop,
-                shape = RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp, topEnd = 22.dp, bottomEnd = 22.dp),
-                description = "Dislike",
-            ) { state.setLike(LikeStatus.Dislike) }
-        }
+    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         ActionPill(
-            icon = if (state.inWatchLater) Icons.Rounded.WatchLater else Icons.Outlined.WatchLater,
-            label = if (state.inWatchLater) "Saved" else "Save",
-            active = state.inWatchLater,
-            flourish = Flourish.Drop,
-            shape = RoundedCornerShape(22.dp),
-            description = "Save to Watch later",
-        ) { state.toggleWatchLater() }
+            icon = if (like == LikeStatus.Like) Icons.Rounded.ThumbUp else Icons.Outlined.ThumbUp,
+            label = likes.takeIf { it > 0 }?.let { formatCount(it) },
+            active = like == LikeStatus.Like,
+            flourish = Flourish.Pop,
+            labelRollsUp = rising,
+            shape = RoundedCornerShape(topStart = 22.dp, bottomStart = 22.dp, topEnd = 8.dp, bottomEnd = 8.dp),
+            description = "Like",
+        ) { state.setLike(LikeStatus.Like) }
+        ActionPill(
+            icon = if (like == LikeStatus.Dislike) Icons.Rounded.ThumbDown else Icons.Outlined.ThumbDown,
+            label = null,
+            active = like == LikeStatus.Dislike,
+            flourish = Flourish.Droop,
+            shape = RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp, topEnd = 22.dp, bottomEnd = 22.dp),
+            description = "Dislike",
+        ) { state.setLike(LikeStatus.Dislike) }
     }
+    ActionPill(
+        icon = if (state.inWatchLater) Icons.Rounded.WatchLater else Icons.Outlined.WatchLater,
+        label = if (state.inWatchLater) "Saved" else "Save",
+        active = state.inWatchLater,
+        flourish = Flourish.Drop,
+        shape = RoundedCornerShape(22.dp),
+        description = "Save to Watch later",
+    ) { state.toggleWatchLater() }
 }
 
 @Composable
@@ -522,8 +572,11 @@ fun MiniPlayer(state: PlayerState, onExpand: () -> Unit, modifier: Modifier = Mo
                     Thumbnail(item.thumbnail, Modifier.fillMaxSize(), radius = 0)
                     // The player's stage, centre-cropped to the slot (as the morph's small end
                     // shows it), with the video fitted inside: never stretched.
-                    Box(Modifier.fillMaxSize().aspectFit(state.stageAspect, cover = true)) {
-                        LocalVideoSurface.current(Modifier.fillMaxSize().aspectFit(state.videoAspect))
+                    // Audio only: there is no picture, the thumbnail stands in.
+                    if (!AudioOnly.enabled) {
+                        Box(Modifier.fillMaxSize().aspectFit(state.stageAspect, cover = true)) {
+                            LocalVideoSurface.current(Modifier.fillMaxSize().aspectFit(state.videoAspect))
+                        }
                     }
                 }
             }

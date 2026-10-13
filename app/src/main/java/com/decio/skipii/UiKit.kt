@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.mandatorySystemGestures
+import androidx.compose.foundation.layout.windowInsetsBottomHeight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -150,6 +152,23 @@ fun SectionTitle(text: String, modifier: Modifier = Modifier) {
         fontWeight = FontWeight.ExtraBold,
         fontSize = 21.sp,
         letterSpacing = (-0.6).sp,
+    )
+}
+
+/**
+ * An invisible strip over the system's home-gesture zone at the very bottom (Derek,
+ * 2026-10-12). The page still draws through it, but a touch that starts there never reaches
+ * the list beneath: the system only claims the swipe after a few moves, so without this every
+ * swipe home first nudged the page up. Place it above the scrolling content, below anything
+ * tappable that reaches into the zone.
+ */
+@Composable
+fun BottomGestureGuard(modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .fillMaxWidth()
+            .windowInsetsBottomHeight(WindowInsets.mandatorySystemGestures)
+            .pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent() } },
     )
 }
 

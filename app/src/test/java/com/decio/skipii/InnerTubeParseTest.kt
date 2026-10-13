@@ -37,6 +37,8 @@ class InnerTubeParseTest {
         val page = InnerTube.parseFeed(fixture("next"))
         assertTrue("got ${page.videos.size}", page.videos.size >= 10)
         assertTrue("channel names", page.videos.count { it.channel.isNotBlank() } >= page.videos.size * 0.8)
+        // Khan Academy's "Fundraiser" badge has the same BADGE_COMMERCE style as movie offers.
+        assertTrue("fundraiser video kept", page.videos.any { it.id == "-7Gl-yKF6Y4" })
     }
 
     /** Less Bitter's Videos tab (captured 2026-10-06): its "Insider Edition" uploads are members-only. */
@@ -46,6 +48,17 @@ class InnerTubeParseTest {
         assertTrue("members-only leaked: ${page.videos.filter { "Insider Edition" in it.title }.map { it.title }}",
             page.videos.none { "Insider Edition" in it.title })
         assertNotNull("channel continuation", page.next)
+    }
+
+    /**
+     * HBO Max's channel page (captured 2026-10-13): 4 movies as gridVideoRenderer ("Try now" + rating)
+     * and 4 Primetime lockups (BADGE_COMMERCE + rating), then 4 ordinary search results.
+     */
+    @Test fun moviesDropped() {
+        val page = InnerTube.parseFeed(fixture("movies"))
+        assertTrue("movies leaked: ${page.videos.filter { "HBO Max" in it.channel }.map { it.title }}",
+            page.videos.none { "HBO Max" in it.channel })
+        assertEquals("ordinary videos kept", 4, page.videos.size)
     }
 
     @Test fun viewCounts() {

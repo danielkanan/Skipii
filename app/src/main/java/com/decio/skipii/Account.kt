@@ -420,10 +420,11 @@ object InnerTube {
         var next: String? = null
         root.walk { key, obj ->
             when (key) {
-                // Members-only videos can't be played (anonymous extraction), so they're never shown.
+                // Members-only videos can't be played (anonymous extraction), and full movies/TV
+                // aren't wanted (Derek), so neither is ever shown.
                 "videoRenderer", "gridVideoRenderer", "compactVideoRenderer", "playlistVideoRenderer" ->
-                    if (!isMembersOnly(obj)) parseVideoRenderer(obj)?.let { videos.putIfAbsent(it.id, it) }
-                "lockupViewModel" -> if (obj.optString("contentType") == "LOCKUP_CONTENT_TYPE_VIDEO" && !isMembersOnly(obj)) {
+                    if (!isMembersOnly(obj) && !isMovie(obj)) parseVideoRenderer(obj)?.let { videos.putIfAbsent(it.id, it) }
+                "lockupViewModel" -> if (obj.optString("contentType") == "LOCKUP_CONTENT_TYPE_VIDEO" && !isMembersOnly(obj) && !isMovie(obj)) {
                     parseLockup(obj)?.let { videos.putIfAbsent(it.id, it) }
                 }
                 // Only the feed's own "load more" item (old and new names); chip filters
@@ -439,6 +440,28 @@ object InnerTube {
     internal fun isMembersOnly(o: JSONObject): Boolean =
         o.collectStrings("badgeStyle").any { it.contains("MEMBERS_ONLY") } ||
             o.collectStrings("style").any { it == "BADGE_STYLE_TYPE_MEMBERS_ONLY" }
+
+    /**
+     * Full movies and TV (Primetime Channels like HBO Max / Shudder, YouTube Movies): a paid-offer
+     * badge ("Try now", "Buy or rent") or a content rating (R, PG-13, TV-MA), which ordinary
+     * uploads never carry. Older renderers: BADGE_STYLE_TYPE_YPC / BADGE_STYLE_TYPE_MEDIA;
+     * lockups: a BADGE_DEFAULT whose text is the rating (not every movie has one) or a
+     * BADGE_COMMERCE offer — ordinary uploads use that style only for "Fundraiser".
+     */
+    internal fun isMovie(o: JSONObject): Boolean {
+        if (o.collectStrings("style").any { it == "BADGE_STYLE_TYPE_YPC" || it == "BADGE_STYLE_TYPE_MEDIA" }) return true
+        var movie = false
+        o.walk { key, badge ->
+            if (key != "badgeViewModel") return@walk
+            val text = badge.optString("badgeText")
+            if (CONTENT_RATING.matches(text) ||
+                (badge.optString("badgeStyle") == "BADGE_COMMERCE" && !text.equals("Fundraiser", ignoreCase = true))
+            ) movie = true
+        }
+        return movie
+    }
+
+    private val CONTENT_RATING = Regex("^(G|PG|PG-13|R|NC-17|NR|TV-(Y|Y7|G|PG|14|MA))$")
 
     private fun parseVideoRenderer(o: JSONObject): VideoItem? {
         val id = o.optString("videoId").ifBlank { return null }

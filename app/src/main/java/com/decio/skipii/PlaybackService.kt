@@ -111,6 +111,14 @@ class PlaybackService : MediaSessionService() {
         )
         player.setVideoFrameMetadataListener { _, releaseTimeNs, _, _ -> AvSync.onFrameReleased(releaseTimeNs) }
         player.addListener(SponsorSkipper(player))
+        player.addListener(SpeedKeeper(player))
+        // Audio only is app-wide and kept; the UI applies it on connect, this covers a start
+        // without one (e.g. resuming from the media notification).
+        if (AudioOnly.enabled) {
+            player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, true)
+                .build()
+        }
         // Before the session's own listener: the UI must see the recovery when the error reaches it.
         player.addListener(StreamRecoverer(player, sources, resolver))
         resumeSaver = ResumeSaver(player).also(player::addListener)
@@ -360,6 +368,22 @@ private class WatchTimeReporter(private val player: ExoPlayer) : Player.Listener
 
     private companion object {
         val PING_DELAYS_MS = longArrayOf(10_000, 10_000, 10_000, 40_000).toList()
+    }
+}
+
+/**
+ * Each video starts at 1×, or at the remembered speed ([PlaybackSpeed]). Only a new video
+ * resets it: fresh links (StreamRecoverer) or a quality switch reload the same video and keep
+ * the speed it was playing at.
+ */
+private class SpeedKeeper(private val player: ExoPlayer) : Player.Listener {
+    private var videoId: String? = null
+
+    override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+        val id = mediaItem?.mediaId?.ifBlank { null } ?: return
+        if (id == videoId) return
+        videoId = id
+        player.setPlaybackSpeed(PlaybackSpeed.forNewVideo)
     }
 }
 

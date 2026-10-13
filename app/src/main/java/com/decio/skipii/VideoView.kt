@@ -364,6 +364,99 @@ fun VideoContent(
 }
 
 /**
+ * The stage in audio only (Derek, 2026-10-13): no picture, just bigger playback controls
+ * (78 dp play, 58 dp skips) and a thicker scrubber, always shown, on a tonal container. The
+ * thumbnail sits underneath at the stage's centred 16:9 window and shows through as it
+ * shrinks, so it lands as the mini-player, which shows the thumbnail in audio only.
+ */
+@Composable
+fun AudioOnlyStage(
+    state: PlayerState,
+    interactive: Boolean,
+    onInactiveTap: () -> Unit,
+    progress: () -> Float,
+    controlsAlpha: () -> Float,
+    modifier: Modifier = Modifier,
+) {
+    val c = MaterialTheme.colorScheme
+    val currentInteractive by androidx.compose.runtime.rememberUpdatedState(interactive)
+    val currentInactiveTap by androidx.compose.runtime.rememberUpdatedState(onInactiveTap)
+    // While collapsing the controls are off (their taps fall through): a tap re-expands.
+    Box(modifier.pointerInput(Unit) { detectTapGestures { if (!currentInteractive) currentInactiveTap() } }) {
+        Box(Modifier.align(Alignment.Center).fillMaxHeight().aspectRatio(16f / 9f)) {
+            Thumbnail(state.current?.thumbnail, Modifier.fillMaxSize(), radius = 0)
+        }
+        Box(Modifier.fillMaxSize().graphicsLayer { alpha = ramp(progress(), 0.25f, 0.85f) }.background(c.surfaceContainer))
+        val error = state.error
+        if (error != null) {
+            ErrorPanel(error, onRetry = state::retry, onCollapse = {})
+            return@Box
+        }
+        Column(
+            Modifier.fillMaxSize().graphicsLayer { alpha = controlsAlpha() }.padding(horizontal = 20.dp),
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(30.dp, Alignment.CenterHorizontally),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TonalSkip(Icons.Rounded.Replay10, "Back 10 seconds", interactive) { state.seekBy(-10_000) }
+                MorphPlayButton(
+                    playing = state.isPlaying,
+                    buffering = state.isBuffering || (state.loading && state.details == null),
+                    size = 78.dp,
+                    container = c.primary,
+                    content = c.onPrimary,
+                    enabled = interactive,
+                ) { state.togglePlay() }
+                TonalSkip(Icons.Rounded.Forward10, "Forward 10 seconds", interactive) { state.seekBy(10_000) }
+            }
+            Spacer(Modifier.height(8.dp))
+            var scrubPreview by remember { mutableStateOf<Long?>(null) }
+            Scrubber(
+                segments = if (SponsorBlock.enabled) state.segments.filter { it.action != SponsorBlock.Action.Off } else emptyList(),
+                positionMs = state.positionMs,
+                bufferedMs = state.bufferedMs,
+                durationMs = state.durationMs,
+                enabled = interactive,
+                onPreview = { scrubPreview = it },
+                onSeek = { scrubPreview = null; state.seekTo(it) },
+                track = c.surfaceContainerHighest,
+                buffered = c.primary.copy(alpha = 0.3f),
+                played = c.primary,
+                trackHeight = 6.dp,
+                knob = 8.dp,
+                knobDragging = 10.dp,
+            )
+            Row(Modifier.fillMaxWidth().height(28.dp), verticalAlignment = Alignment.CenterVertically) {
+                val time = Modifier.width(56.dp)
+                Text(formatDuration(scrubPreview ?: state.positionMs), color = c.onSurfaceVariant, fontSize = 12.5.sp, fontWeight = FontWeight.ExtraBold, modifier = time)
+                // SponsorBlock's Ask pill, or the note after an automatic skip, between the times.
+                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                    val ask = state.askSegment
+                    if (ask != null) SkipSegmentPill(ask, enabled = interactive) { state.skipSegment(ask) }
+                    else SkippedNote(state, Modifier)
+                }
+                Text(
+                    formatDuration(state.durationMs), color = c.onSurfaceVariant, fontSize = 12.5.sp, fontWeight = FontWeight.ExtraBold,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.End, modifier = time,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TonalSkip(icon: ImageVector, description: String, enabled: Boolean, onClick: () -> Unit) {
+    val c = MaterialTheme.colorScheme
+    Box(
+        Modifier.size(58.dp).pressable(enabled = enabled, onClick = onClick).clip(CircleShape).background(c.surfaceContainerHigh),
+        contentAlignment = Alignment.Center,
+    ) { Icon(icon, description, tint = c.onSurface, modifier = Modifier.size(34.dp)) }
+}
+
+/**
  * Lays the content out at [aspect], centred: as large as fits inside the incoming box, or
  * with [cover] as small as covers it (the overflow is for the caller to clip).
  */
@@ -687,7 +780,10 @@ fun MorphPlayButton(
     }
 }
 
-/** Thin scrubber drawn on the video: buffered and played tracks, a knob that grows while dragging. */
+/**
+ * Scrubber: buffered and played tracks, a knob that grows while dragging. Thin and white on
+ * the video; the audio-only stage passes its own colors and sizes.
+ */
 @Composable
 private fun Scrubber(
     segments: List<SponsorBlock.Segment>,
@@ -697,12 +793,18 @@ private fun Scrubber(
     enabled: Boolean,
     onPreview: (Long) -> Unit,
     onSeek: (Long) -> Unit,
+    track: Color = Color.White.copy(alpha = 0.3f),
+    buffered: Color = Color.White.copy(alpha = 0.5f),
+    played: Color = Color.White,
+    trackHeight: Dp = 4.dp,
+    knob: Dp = 7.dp,
+    knobDragging: Dp = 9.dp,
 ) {
     var dragFraction by remember { mutableStateOf<Float?>(null) }
     val duration = durationMs.coerceAtLeast(1L)
-    val played = dragFraction ?: (positionMs.toFloat() / duration).coerceIn(0f, 1f)
-    val buffered = (bufferedMs.toFloat() / duration).coerceIn(0f, 1f)
-    val knob by animateDpAsState(if (dragFraction != null) 9.dp else 7.dp, label = "knob")
+    val playedFraction = dragFraction ?: (positionMs.toFloat() / duration).coerceIn(0f, 1f)
+    val bufferedFraction = (bufferedMs.toFloat() / duration).coerceIn(0f, 1f)
+    val knobRadius by animateDpAsState(if (dragFraction != null) knobDragging else knob, label = "knob")
     Canvas(
         modifier = Modifier
             .fillMaxWidth()
@@ -730,18 +832,18 @@ private fun Scrubber(
                 }
             },
     ) {
-        val trackH = 4.dp.toPx()
+        val trackH = trackHeight.toPx()
         val y = size.height / 2f - trackH / 2f
         val r = CornerRadius(trackH / 2f)
-        drawRoundRect(Color.White.copy(alpha = 0.3f), Offset(0f, y), Size(size.width, trackH), r)
-        drawRoundRect(Color.White.copy(alpha = 0.5f), Offset(0f, y), Size(size.width * buffered, trackH), r)
-        drawRoundRect(Color.White, Offset(0f, y), Size(size.width * played, trackH), r)
+        drawRoundRect(track, Offset(0f, y), Size(size.width, trackH), r)
+        drawRoundRect(buffered, Offset(0f, y), Size(size.width * bufferedFraction, trackH), r)
+        drawRoundRect(played, Offset(0f, y), Size(size.width * playedFraction, trackH), r)
         // SponsorBlock segments, in their category colors, over the track.
         segments.forEach { seg ->
             val x0 = size.width * (seg.startMs.toFloat() / duration).coerceIn(0f, 1f)
             val x1 = size.width * (seg.endMs.toFloat() / duration).coerceIn(0f, 1f)
             if (x1 > x0) drawRect(seg.category.color, Offset(x0, y), Size(x1 - x0, trackH))
         }
-        drawCircle(Color.White, radius = knob.toPx(), center = Offset(size.width * played, size.height / 2f))
+        drawCircle(played, radius = knobRadius.toPx(), center = Offset(size.width * playedFraction, size.height / 2f))
     }
 }

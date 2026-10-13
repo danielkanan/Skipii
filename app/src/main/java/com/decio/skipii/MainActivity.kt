@@ -201,7 +201,8 @@ fun SkipiiApp() {
     val activity = LocalContext.current as Activity
     val orientation = rememberOrientationController(activity)
     val playerOpen = player.current != null && player.expanded
-    orientation.Bind(playerOpen)
+    // Audio only has no picture to go fullscreen with: the open player stays portrait.
+    orientation.Bind(playerOpen && !AudioOnly.enabled)
     val pip = remember(activity) { PipController(activity as ComponentActivity) }
     // Closing the picture-in-picture window pauses (expanding it just comes back).
     pip.Bind(onClosed = { player.controller?.pause() })
@@ -349,6 +350,8 @@ fun SkipiiApp() {
                 .height(navBottom + 130.dp)
                 .drawBehind { drawRect(vignette) },
         )
+        // Swiping home from here never scrolls the page (the tab bar above still wins its taps).
+        BottomGestureGuard(Modifier.align(Alignment.BottomCenter))
 
         if (hasMini) {
             // Swipe up expands (the morph); swipe down follows the finger and, past a

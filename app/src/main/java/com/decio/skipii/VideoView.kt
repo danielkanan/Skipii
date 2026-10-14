@@ -129,7 +129,7 @@ fun VideoContent(
     val reduced = rememberReducedMotion()
     val visibleAlpha by animateFloatAsState(
         targetValue = if (controlsVisible) 1f else 0f,
-        animationSpec = if (reduced) tween(0) else tween(240, easing = Motion.Emphasized),
+        animationSpec = if (reduced) tween(0) else tween(160, easing = Motion.Emphasized),
         label = "controlsAlpha",
     )
 
@@ -168,8 +168,8 @@ fun VideoContent(
     Box(modifier.background(Color.Black).onGloballyPositioned { pip?.videoBounds = it.boundsInWindow() }.pointerInput(state) {
         val doubleTapMs = viewConfiguration.doubleTapTimeoutMillis
         coroutineScope {
-            // A lone tap on a side waits out the double-tap timeout before toggling the controls.
-            var pendingTap: Job? = null
+            // Side taps show/hide controls at once; a second tap on that side inside the double-tap window seeks.
+            var seekWindow: Job? = null
             var pendingSide = 0
             var pendingAt = 0L
             awaitEachGesture {
@@ -181,20 +181,21 @@ fun VideoContent(
                 val side = if (x < 0.4f) -1 else if (x > 0.6f) 1 else 0
                 if (burstActive && side == burstSide) { seekStep(side); return@awaitEachGesture }
                 burstActive = false
-                val waiting = pendingTap?.isActive == true
-                pendingTap?.cancel()
+                val inSeekWindow = seekWindow?.isActive == true
+                seekWindow?.cancel()
                 if (side == 0 || state.error != null) {
                     toggleControls()
-                } else if (waiting && side == pendingSide && up.uptimeMillis - pendingAt < doubleTapMs) {
+                } else if (inSeekWindow && side == pendingSide && up.uptimeMillis - pendingAt < doubleTapMs) {
                     controlsVisible = false
                     burstSide = side
                     burstSeconds = 0
                     burstActive = true
                     seekStep(side)
                 } else {
+                    toggleControls()
                     pendingSide = side
                     pendingAt = up.uptimeMillis
-                    pendingTap = launch { delay(doubleTapMs); toggleControls() }
+                    seekWindow = launch { delay(doubleTapMs) }
                 }
             }
         }

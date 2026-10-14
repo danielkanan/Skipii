@@ -58,6 +58,8 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import android.view.inputmethod.InputMethodManager
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -68,6 +70,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 // ── Home / Subscriptions / Library ─────────────────────────────────────────────
@@ -88,7 +91,7 @@ fun HomeScreen(
     LaunchedEffect(signedIn) { if (signedIn) lib.home.ensureLoaded() }
     CollapsingHeaderLayout(
         resetKey = scrollToTop to lib.home.generation,
-        header = { ScreenHeader(title = "Skipii", brandMark = true) { AccountAction(onAccount) } },
+        header = { ScreenHeader(title = "Skipii", brandMark = true) { HeaderActions(onSearch, onAccount) } },
     ) { top ->
         if (signedIn) {
             FeedList(lib.home, contentPadding.withTop(top), onOpen, scrollToTop = scrollToTop, indicatorTop = top)
@@ -118,6 +121,7 @@ fun SubscriptionsScreen(
     lib: LibraryData,
     contentPadding: PaddingValues,
     onOpen: (VideoItem) -> Unit,
+    onSearch: () -> Unit,
     onSignIn: () -> Unit,
     onAccount: () -> Unit,
     scrollToTop: Int = 0,
@@ -145,7 +149,7 @@ fun SubscriptionsScreen(
         resetKey = scrollToTop to listOf(lib.subscriptions.generation, selectedChannelId, lib.channels.size),
         header = {
             Column(Modifier.fillMaxWidth()) {
-                ScreenHeader(title = "Subscriptions") { AccountAction(onAccount) }
+                ScreenHeader(title = "Subscriptions") { HeaderActions(onSearch, onAccount) }
                 if (signedIn && lib.channels.isNotEmpty()) {
                     SubscriptionsChannelStrip(
                         channels = lib.channels,
@@ -296,6 +300,7 @@ fun LibraryScreen(
     contentPadding: PaddingValues,
     onOpen: (VideoItem) -> Unit,
     onOpenPlaylist: (PlaylistRef) -> Unit,
+    onSearch: () -> Unit,
     onSignIn: () -> Unit,
     onAccount: () -> Unit,
     scrollToTop: Int = 0,
@@ -310,7 +315,7 @@ fun LibraryScreen(
     }
     CollapsingHeaderLayout(
         resetKey = scrollToTop to lib.history.generation,
-        header = { ScreenHeader(title = "Library") { AccountAction(onAccount) } },
+        header = { ScreenHeader(title = "Library") { HeaderActions(onSearch, onAccount) } },
     ) { top ->
         PullToRefresh(
             enabled = signedIn,
@@ -492,11 +497,23 @@ class SearchState(private val scope: CoroutineScope) {
 }
 
 @Composable
-fun SearchScreen(state: SearchState, contentPadding: PaddingValues, onOpen: (VideoItem) -> Unit, scrollToTop: Int = 0) {
+fun SearchScreen(
+    state: SearchState,
+    contentPadding: PaddingValues,
+    onBack: () -> Unit,
+    onOpen: (VideoItem) -> Unit,
+    scrollToTop: Int = 0,
+) {
     val c = MaterialTheme.colorScheme
     val keyboard = LocalSoftwareKeyboardController.current
     val focus = LocalFocusManager.current
     val view = LocalView.current
+    val searchFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        delay(80)
+        runCatching { searchFocus.requestFocus() }
+        keyboard?.show()
+    }
     // Search and Enter both dismiss the keyboard — every field, every time. A hide issued
     // while the key event is still being dispatched can be undone by the IME, so the
     // window-level hide is posted to run after it.
@@ -509,53 +526,60 @@ fun SearchScreen(state: SearchState, contentPadding: PaddingValues, onOpen: (Vid
         }, 120)
         state.submit()
     }
+    Box(Modifier.fillMaxSize().background(c.surface).overlayTouchBlock()) {
     // The search bar rides with the header: both slide away together while scrolling results.
     CollapsingHeaderLayout(
         resetKey = scrollToTop to state.generation,
-        header = { Column {
-        ScreenHeader(title = "Search")
-        Row(
-            modifier = Modifier
-                .padding(horizontal = 16.dp)
-                .fillMaxWidth()
-                .height(60.dp)
-                .clip(CircleShape)
-                .background(c.surfaceContainerHigh)
-                .padding(start = 20.dp, end = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(Icons.Rounded.Search, null, tint = c.onSurfaceVariant)
-            Spacer(Modifier.width(12.dp))
-            Box(Modifier.weight(1f)) {
-                if (state.query.isEmpty()) {
-                    Text("Search YouTube", color = c.onSurfaceVariant, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        header = {
+            BackScreenHeader(onBack = onBack) {
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp)
+                        .clip(CircleShape)
+                        .background(c.surfaceContainerHigh)
+                        .padding(start = 16.dp, end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Rounded.Search, null, tint = c.onSurfaceVariant, modifier = Modifier.size(22.dp))
+                    Spacer(Modifier.width(10.dp))
+                    Box(Modifier.weight(1f)) {
+                        if (state.query.isEmpty()) {
+                            Text(
+                                "Search YouTube",
+                                color = c.onSurfaceVariant,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        BasicTextField(
+                            value = state.query,
+                            onValueChange = { state.query = it },
+                            singleLine = true,
+                            textStyle = TextStyle(color = c.onSurface, fontSize = 16.sp, fontWeight = FontWeight.SemiBold),
+                            cursorBrush = SolidColor(c.primary),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(onSearch = { submit() }, onDone = { submit() }),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(searchFocus)
+                                .onPreviewKeyEvent { e ->
+                                    if (e.key == Key.Enter || e.key == Key.NumPadEnter) {
+                                        if (e.type == KeyEventType.KeyDown) submit()
+                                        true
+                                    } else false
+                                },
+                        )
+                    }
+                    if (state.query.isNotEmpty()) {
+                        Box(
+                            modifier = Modifier.size(40.dp).pressable { state.query = "" },
+                            contentAlignment = Alignment.Center,
+                        ) { Icon(Icons.Rounded.Close, "Clear", tint = c.onSurfaceVariant, modifier = Modifier.size(20.dp)) }
+                    }
                 }
-                BasicTextField(
-                    value = state.query,
-                    onValueChange = { state.query = it },
-                    singleLine = true,
-                    textStyle = TextStyle(color = c.onSurface, fontSize = 16.sp, fontWeight = FontWeight.SemiBold),
-                    cursorBrush = SolidColor(c.primary),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { submit() }, onDone = { submit() }),
-                    // Hardware Enter doesn't go through the IME action; treat it the same.
-                    modifier = Modifier.fillMaxWidth().onPreviewKeyEvent { e ->
-                        if (e.key == Key.Enter || e.key == Key.NumPadEnter) {
-                            if (e.type == KeyEventType.KeyDown) submit()
-                            true
-                        } else false
-                    },
-                )
             }
-            if (state.query.isNotEmpty()) {
-                Box(
-                    modifier = Modifier.size(44.dp).pressable { state.query = "" },
-                    contentAlignment = Alignment.Center,
-                ) { Icon(Icons.Rounded.Close, "Clear", tint = c.onSurfaceVariant) }
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-        } },
+        },
     ) { top ->
         Box(Modifier.fillMaxSize()) {
         Box(Modifier.padding(top = if (state.results.isNotEmpty() && state.error == null) 0.dp else top)) {
@@ -591,5 +615,6 @@ fun SearchScreen(state: SearchState, contentPadding: PaddingValues, onOpen: (Vid
         }
         }
         }
+    }
     }
 }

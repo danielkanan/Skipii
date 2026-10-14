@@ -123,7 +123,6 @@ class MainActivity : ComponentActivity() {
 enum class Tab(val label: String, val icon: ImageVector, val selectedIcon: ImageVector) {
     Home("Home", Icons.Outlined.Home, Icons.Rounded.Home),
     Subscriptions("Subscriptions", Icons.Outlined.Subscriptions, Icons.Rounded.Subscriptions),
-    Search("Search", Icons.Rounded.Search, Icons.Rounded.Search),
     Library("Library", Icons.Outlined.VideoLibrary, Icons.Rounded.VideoLibrary),
 }
 
@@ -148,6 +147,7 @@ fun SkipiiApp() {
     var openPlaylist by remember { mutableStateOf<PlaylistRef?>(null) }
     var openChannel by remember { mutableStateOf<String?>(null) }
     var openAllSubscriptions by remember { mutableStateOf(false) }
+    var openSearch by remember { mutableStateOf(false) }
     // Kept after closing so the page can slide out with its content.
     var channelState by remember { mutableStateOf<ChannelState?>(null) }
     val playlistFeed = remember(openPlaylist?.id) { openPlaylist?.let { lib.playlistFeed(it.id) } }
@@ -170,7 +170,11 @@ fun SkipiiApp() {
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     LaunchedEffect(player.expanded) {
-        if (player.expanded) { focusManager.clearFocus(force = true); keyboard?.hide() }
+        if (player.expanded) {
+            openSearch = false
+            focusManager.clearFocus(force = true)
+            keyboard?.hide()
+        }
     }
 
     // Off screen (app in background, screen locked): audio only.
@@ -221,6 +225,7 @@ fun SkipiiApp() {
     BackHandler(enabled = !player.expanded && tab != Tab.Home && openPlaylist == null && openChannel == null && !openAllSubscriptions) {
         tab = Tab.Home
     }
+    BackHandler(enabled = !player.expanded && openSearch) { openSearch = false }
     BackHandler(enabled = !player.expanded && openPlaylist != null) { openPlaylist = null }
     BackHandler(enabled = signingIn) { signingIn = false }
     BackHandler(enabled = !player.expanded && openChannel != null) { openChannel = null }
@@ -300,23 +305,36 @@ fun SkipiiApp() {
         ) { t ->
             when (t) {
                 Tab.Home -> HomeScreen(
-                    lib, contentPadding, onOpen = player::open, onSearch = { tab = Tab.Search },
+                    lib, contentPadding, onOpen = player::open, onSearch = { openSearch = true },
                     onSignIn = { signingIn = true }, onAccount = { accountSheet = true },
                     scrollToTop = scrollToTop[Tab.Home] ?: 0,
                 )
                 Tab.Subscriptions -> SubscriptionsScreen(
-                    lib, contentPadding, onOpen = player::open,
+                    lib, contentPadding, onOpen = player::open, onSearch = { openSearch = true },
                     onSignIn = { signingIn = true }, onAccount = { accountSheet = true },
                     scrollToTop = scrollToTop[Tab.Subscriptions] ?: 0,
                     onOpenAllSubscriptions = { openAllSubscriptions = true },
                 )
-                Tab.Search -> SearchScreen(search, contentPadding, onOpen = player::open, scrollToTop = scrollToTop[Tab.Search] ?: 0)
                 Tab.Library -> LibraryScreen(
                     lib, contentPadding, onOpen = player::open, onOpenPlaylist = { openPlaylist = it },
+                    onSearch = { openSearch = true },
                     onSignIn = { signingIn = true }, onAccount = { accountSheet = true },
                     scrollToTop = scrollToTop[Tab.Library] ?: 0,
                 )
             }
+        }
+
+        AnimatedVisibility(
+            visible = openSearch,
+            enter = if (reduced) fadeIn(snap()) else slideInHorizontally(tween(340, easing = Motion.Emphasized)) { it } + fadeIn(tween(120)),
+            exit = if (reduced) fadeOut(snap()) else slideOutHorizontally(tween(300, easing = Motion.Emphasized)) { it } + fadeOut(tween(220)),
+        ) {
+            SearchScreen(
+                search,
+                contentPadding,
+                onBack = { openSearch = false },
+                onOpen = player::open,
+            )
         }
 
         // A playlist opens as a page over the tabs (slides in from the right).
@@ -429,11 +447,18 @@ fun SkipiiApp() {
             onSelect = { selected ->
                 when {
                     // Re-tapping the current tab: back out of a playlist, else scroll to top.
+                    selected == tab && openSearch -> openSearch = false
                     selected == tab && openChannel != null -> openChannel = null
                     selected == tab && openPlaylist != null -> openPlaylist = null
                     selected == tab && openAllSubscriptions -> openAllSubscriptions = false
                     selected == tab -> scrollToTop[selected] = (scrollToTop[selected] ?: 0) + 1
-                    else -> { openPlaylist = null; openChannel = null; openAllSubscriptions = false; tab = selected }
+                    else -> {
+                        openPlaylist = null
+                        openChannel = null
+                        openAllSubscriptions = false
+                        openSearch = false
+                        tab = selected
+                    }
                 }
             },
             modifier = Modifier.align(Alignment.BottomCenter).padding(start = 16.dp, end = 16.dp, bottom = stackBottom),

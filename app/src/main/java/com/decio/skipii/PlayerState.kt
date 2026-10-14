@@ -23,6 +23,8 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.session.MediaController
+import kotlin.math.min
+import kotlin.math.roundToInt
 import androidx.media3.session.SessionToken
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -82,16 +84,18 @@ class PlayerState(private val scope: CoroutineScope) {
     private var aspectFromFrames = false
 
     /**
-     * The portrait player's shape: the video's own, within [StageMinAspect]..[StageMaxAspect];
-     * in audio only, the short strip that holds just the controls.
+     * Portrait player frame: the video's aspect within [StageMinAspect]..[StageMaxAspect], but
+     * not wider than [StageFrameAspect] (ultrawide letterboxes inside 16:9).
      */
-    val stageAspect: Float get() = if (AudioOnly.enabled) AudioStageAspect else videoAspect.coerceIn(StageMinAspect, StageMaxAspect)
+    val stageAspect: Float get() = if (AudioOnly.enabled) AudioStageAspect else {
+        min(videoAspect.coerceIn(StageMinAspect, StageMaxAspect), StageFrameAspect)
+    }
     var firstFrameRendered by mutableStateOf(false)
         private set
     /** What the decoder is really producing, e.g. "1920×1080 · H.264 · itag 299". */
     var playingFormat by mutableStateOf<String?>(null)
         private set
-    /** Height of the frames actually decoded; the quality label shows this when known. */
+    /** Quality tier label (1080p, not ultrawide pixel height) from decoded frames when known. */
     var decodedHeight by mutableStateOf<Int?>(null)
         private set
 
@@ -565,7 +569,10 @@ class PlayerState(private val scope: CoroutineScope) {
         override fun onVideoSizeChanged(videoSize: VideoSize) = takeVideoSize(videoSize)
 
         override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
-            controller?.videoSize?.height?.takeIf { it > 0 }?.let(::describeFormat)
+            val vs = controller?.videoSize ?: return
+            if (vs.width <= 0 || vs.height <= 0) return
+            val w = (vs.width * vs.pixelWidthHeightRatio).roundToInt()
+            describeFormat(w, vs.height)
         }
 
         override fun onRenderedFirstFrame() {
@@ -592,18 +599,25 @@ class PlayerState(private val scope: CoroutineScope) {
         videoAspect = videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height
         aspectFromFrames = true
         // Auto switches resolution mid-play; the label follows the real frames.
-        describeFormat(videoSize.height)
+        val w = (videoSize.width * videoSize.pixelWidthHeightRatio).roundToInt()
+        describeFormat(w, videoSize.height)
     }
 
     /** Fills the quality label and the "Playing …" line from the frames actually decoded. */
-    private fun describeFormat(height: Int) {
-        if (decodedHeight != height) Log.i("SkipiiTime", "now ${height}p at +${android.os.SystemClock.elapsedRealtime() - openedAt}ms")
-        decodedHeight = height
+    private fun describeFormat(width: Int, height: Int) {
+        val tier = qualityTier(width, height)
+        if (decodedHeight != tier) {
+            Log.i("SkipiiTime", "now ${tier}p (${width}×${height}) at +${android.os.SystemClock.elapsedRealtime() - openedAt}ms")
+        }
+        decodedHeight = tier
         val formats = controller?.currentTracks?.groups.orEmpty()
             .filter { it.type == androidx.media3.common.C.TRACK_TYPE_VIDEO }
             .flatMap { g -> (0 until g.length).map { g.getTrackFormat(it) } }
         val format = formats.firstOrNull { it.height == height }
-        if (format == null) { playingFormat = "${height}p"; return }
+        if (format == null) {
+            playingFormat = "${tier}p"
+            return
+        }
         run {
             val codec = when {
                 format.codecs?.startsWith("avc") == true -> "H.264"
@@ -612,7 +626,8 @@ class PlayerState(private val scope: CoroutineScope) {
                 else -> format.codecs ?: format.sampleMimeType ?: "?"
             }
             val auto = if (formats.size > 1) "Auto" else null
-            playingFormat = listOfNotNull(auto, "${format.width}×${format.height}", codec, format.id?.substringAfterLast(":")?.let { "itag $it" }).joinToString(" · ")
+            val labelTier = qualityTier(format.width, format.height)
+            playingFormat = listOfNotNull(auto, "${labelTier}p", codec, format.id?.substringAfterLast(":")?.let { "itag $it" }).joinToString(" · ")
         }
     }
 }

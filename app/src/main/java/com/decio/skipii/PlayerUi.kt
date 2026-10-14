@@ -99,11 +99,13 @@ internal val MiniThumbWidth = 92.dp
 internal val MiniThumbHeight = 52.dp
 internal val MiniThumbRadius = 17.dp
 /**
- * The portrait video takes the video's own shape (Derek, 2026-10-10: no black bars), from
- * 4:5 for tall videos to 2.4:1 for wide ones; anything beyond fits inside with bars.
+ * Portrait stage shape: tall videos can use up to 4:5; wide ones letterbox inside a 16:9 frame
+ * (2.35:1 and wider no longer squash the whole player flat).
  */
 internal const val StageMinAspect = 0.8f
 internal const val StageMaxAspect = 2.4f
+/** Wider than this: stage stays 16:9 and the picture letterboxes top/bottom. */
+internal const val StageFrameAspect = 16f / 9f
 /** Audio only: the stage is a short strip holding just the controls (~164 dp on a Pixel). */
 internal const val AudioStageAspect = 2.5f
 /** Morph progress after which the details and tint start fading in (tuning dial). */

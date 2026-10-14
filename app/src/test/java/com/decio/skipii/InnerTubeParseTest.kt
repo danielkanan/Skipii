@@ -37,6 +37,13 @@ class InnerTubeParseTest {
         }
     }
 
+    @Test fun ultrawideQualityTiers() {
+        assertEquals(2160, qualityTier(3840, 1634))
+        assertEquals(1080, qualityTier(1920, 818))
+        assertEquals(720, qualityTier(1280, 544))
+        assertEquals(1080, qualityTier(1920, 1080))
+    }
+
     @Test fun normalizeYtcToGoogleusercontent() {
         val ggpht = "https://yt3.ggpht.com/ytc/AIdro_n1Ribd7LwdP_qKtqWL3ZDfIgv9M1d6g78VwpHGXVR2Ir4=s6"
         val out = normalizeChannelAvatarUrl(ggpht)

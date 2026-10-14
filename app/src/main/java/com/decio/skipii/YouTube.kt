@@ -342,7 +342,7 @@ object QualityPreference {
 
     fun init(context: Context) {
         prefs = context.getSharedPreferences("playback", Context.MODE_PRIVATE)
-        height = prefs?.getInt(KEY, 0)?.takeIf { it > 0 }
+        height = prefs?.getInt(KEY, 0)?.takeIf { it > 0 }?.takeIf { it in QUALITY_LADDER }
     }
 
     fun set(value: Int?) {
@@ -351,16 +351,36 @@ object QualityPreference {
     }
 }
 
+/** Standard rungs shown in the quality sheet (matches YouTube's labels). */
+val QUALITY_LADDER = intArrayOf(144, 240, 360, 480, 720, 1080, 1440, 2160, 4320)
+
+/**
+ * Label tier for a stream: 16:9 and taller uses pixel height; ultrawide uses the equivalent
+ * 16:9 height from width (3840×1634 → 2160p, 1920×818 → 1080p).
+ */
+fun qualityTier(width: Int, height: Int): Int {
+    if (height <= 0) return 0
+    val basis = if (width > 0 && width.toFloat() / height > 16f / 9f + 0.02f) {
+        width * 9 / 16
+    } else {
+        height
+    }
+    return QUALITY_LADDER.minByOrNull { kotlin.math.abs(it - basis) } ?: basis
+}
+
+private fun VideoStream.tier() = qualityTier(width, height)
+
 /** Chooses which of YouTube's many streams to play. */
 object StreamSelection {
-    /** Above this height, phones gain little and pay a lot in data. */
-    private const val MAX_HEIGHT = 1080
+    /** Above this tier, phones gain little and pay a lot in data. */
+    private const val MAX_TIER = 1080
 
     data class Picked(val video: VideoStream?, val audio: AudioStream?, val muxed: VideoStream?) {
         val isPlayable get() = (video != null && audio != null) || muxed != null
         /** What will actually play: the separate streams, or the combined fallback. */
         val usesSeparate get() = video != null && audio != null
-        val playedHeight: Int? get() = (if (usesSeparate) video?.height else muxed?.height)?.takeIf { it > 0 }
+        /** Quality label tier (1080p, not the ultrawide pixel height). */
+        val playedHeight: Int? get() = (if (usesSeparate) video?.tier() else muxed?.tier())?.takeIf { it > 0 }
     }
 
     fun pick(info: StreamInfo): Picked {
@@ -373,11 +393,11 @@ object StreamSelection {
         val candidates = info.videoOnlyStreams
             .filter { it.isUrl && it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP && it.height > 0 }
         val chosen = QualityPreference.height
-        // A chosen height plays exactly if offered, else the nearest below it. Auto caps at 1080p.
-        val ceiling = chosen ?: MAX_HEIGHT
-        val video = (candidates.filter { it.height <= ceiling }.ifEmpty { candidates })
+        // A chosen tier plays exactly if offered, else the nearest below. Auto caps at 1080p.
+        val ceiling = chosen ?: MAX_TIER
+        val video = (candidates.filter { it.tier() <= ceiling }.ifEmpty { candidates })
             .sortedWith(
-                compareBy<VideoStream> { if (it.height <= ceiling) ceiling - it.height else it.height }
+                compareBy<VideoStream> { if (it.tier() <= ceiling) ceiling - it.tier() else it.tier() }
                     .thenBy { formatRank(it.format) },
             )
             .firstOrNull()
@@ -405,16 +425,18 @@ object StreamSelection {
      * can sustain immediately and climbs, like YouTube.
      */
     fun autoLadder(info: StreamInfo): List<VideoStream> {
-        val usable = info.videoOnlyStreams.filter { it.isUrl && it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP && it.height in 1..MAX_HEIGHT && it.itagItem != null }
+        val usable = info.videoOnlyStreams.filter {
+            it.isUrl && it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP && it.tier() in 1..MAX_TIER && it.itagItem != null
+        }
         val family = usable.filter { it.codec?.startsWith("avc") == true }.ifEmpty { usable.filter { it.format == MediaFormat.WEBM } }
-        return family.groupBy { it.height }
-            .map { (_, sameHeight) -> sameHeight.maxBy { it.fps * 100_000L + it.bitrate } }
-            .sortedBy { it.height }
+        return family.groupBy { it.tier() }
+            .map { (_, sameTier) -> sameTier.maxBy { it.fps * 100_000L + it.bitrate } }
+            .sortedBy { it.tier() }
     }
 
     fun heights(info: StreamInfo): List<Int> = info.videoOnlyStreams
         .filter { it.isUrl && it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP && it.height > 0 }
-        .map { it.height }
+        .map { it.tier() }
         .distinct()
         .sortedDescending()
 }

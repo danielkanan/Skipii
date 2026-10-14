@@ -202,8 +202,7 @@ fun VideoContent(
     }) {
         Box(
             Modifier
-                // As large as fits in whatever box we're given. The portrait stage already has
-                // the video's shape, so bars appear only past its limits (and in fullscreen).
+                // Letterbox/pillarbox inside the stage (16:9 cap for ultrawide in portrait; fullscreen fills).
                 .fillMaxSize()
                 .aspectFit(state.videoAspect)
                 .clipToBounds(),
@@ -282,7 +281,7 @@ fun VideoContent(
                     } else {
                         Spacer(Modifier.weight(1f))
                     }
-                    // The label is the resolution actually decoded; the requested one until known.
+                    // Label tier from decoded frames (1080p, not ultrawide pixel height); details until known.
                     (state.decodedHeight?.let { "${it}p" } ?: state.details?.quality)?.let { quality ->
                         Box(
                             Modifier

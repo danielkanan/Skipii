@@ -468,9 +468,14 @@ private fun TextLink(text: String, onClick: () -> Unit) {
 @Stable
 class SearchState(private val scope: CoroutineScope) {
     var query by mutableStateOf("")
+        private set
     var submitted by mutableStateOf("")
         private set
     var results by mutableStateOf<List<VideoItem>>(emptyList())
+        private set
+    var suggestions by mutableStateOf<List<String>>(emptyList())
+        private set
+    var suggestionsLoading by mutableStateOf(false)
         private set
     var loading by mutableStateOf(false)
         private set
@@ -479,10 +484,32 @@ class SearchState(private val scope: CoroutineScope) {
     var generation by mutableStateOf(0)
         private set
     private var job: Job? = null
+    private var suggestJob: Job? = null
+
+    fun updateQuery(text: String) {
+        query = text
+        suggestJob?.cancel()
+        if (text.isBlank()) {
+            suggestions = emptyList()
+            suggestionsLoading = false
+            return
+        }
+        suggestJob = scope.launch {
+            delay(220)
+            suggestionsLoading = true
+            runCatching { YouTube.searchSuggestions(text) }
+                .onSuccess { suggestions = it }
+                .onFailure { suggestions = emptyList() }
+            suggestionsLoading = false
+        }
+    }
 
     fun submit() {
         val q = query.trim()
         if (q.isEmpty()) return
+        suggestJob?.cancel()
+        suggestions = emptyList()
+        suggestionsLoading = false
         submitted = q
         loading = true
         error = null
@@ -554,7 +581,7 @@ fun SearchScreen(
                         }
                         BasicTextField(
                             value = state.query,
-                            onValueChange = { state.query = it },
+                            onValueChange = state::updateQuery,
                             singleLine = true,
                             textStyle = TextStyle(color = c.onSurface, fontSize = 16.sp, fontWeight = FontWeight.SemiBold),
                             cursorBrush = SolidColor(c.primary),
@@ -573,7 +600,7 @@ fun SearchScreen(
                     }
                     if (state.query.isNotEmpty()) {
                         Box(
-                            modifier = Modifier.size(40.dp).pressable { state.query = "" },
+                            modifier = Modifier.size(40.dp).pressable { state.updateQuery("") },
                             contentAlignment = Alignment.Center,
                         ) { Icon(Icons.Rounded.Close, "Clear", tint = c.onSurfaceVariant, modifier = Modifier.size(20.dp)) }
                     }
@@ -581,9 +608,54 @@ fun SearchScreen(
             }
         },
     ) { top ->
+        val draft = state.query.isNotBlank() &&
+            (state.submitted.isEmpty() || state.query.trim() != state.submitted.trim())
         Box(Modifier.fillMaxSize()) {
-        Box(Modifier.padding(top = if (state.results.isNotEmpty() && state.error == null) 0.dp else top)) {
+        Box(Modifier.padding(top = if (!draft && state.results.isNotEmpty() && state.error == null) 0.dp else top)) {
         when {
+            draft -> {
+                if (state.suggestionsLoading && state.suggestions.isEmpty()) {
+                    Box(Modifier.fillMaxWidth().padding(top = 32.dp), Alignment.Center) {
+                        CircularProgressIndicator(color = c.primary, strokeWidth = 4.dp, modifier = Modifier.size(32.dp))
+                    }
+                } else if (state.suggestions.isEmpty()) {
+                    EmptyState(
+                        icon = Icons.Rounded.Search,
+                        title = "Keep typing",
+                        body = "Suggestions appear as you enter a search.",
+                    )
+                } else {
+                    LazyColumn(contentPadding = contentPadding) {
+                        items(state.suggestions, key = { it }) { suggestion ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .pressable {
+                                        state.updateQuery(suggestion)
+                                        submit()
+                                    }
+                                    .padding(horizontal = 20.dp, vertical = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    Icons.Rounded.Search,
+                                    null,
+                                    tint = c.onSurfaceVariant,
+                                    modifier = Modifier.size(22.dp),
+                                )
+                                Spacer(Modifier.width(16.dp))
+                                Text(
+                                    suggestion,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
             state.loading && state.results.isEmpty() -> Box(Modifier.fillMaxWidth().padding(top = 48.dp), Alignment.Center) {
                 CircularProgressIndicator(color = c.primary, strokeWidth = 4.dp, modifier = Modifier.size(36.dp))
             }

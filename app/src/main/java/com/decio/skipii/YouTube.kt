@@ -140,6 +140,12 @@ object YouTube {
             .mapNotNull { it.toVideoItem() }
     }
 
+    suspend fun searchSuggestions(query: String): List<String> = withContext(Dispatchers.IO) {
+        val q = query.trim()
+        if (q.isEmpty()) emptyList()
+        else service.suggestionExtractor.suggestionList(q)
+    }
+
     suspend fun details(id: String): VideoDetails = withContext(Dispatchers.IO) {
         val info = StreamCache.getOrLoad(id)
         val picked = StreamSelection.pick(info)

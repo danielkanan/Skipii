@@ -157,7 +157,13 @@ fun VideoContent(
     LaunchedEffect(burstTaps) {
         if (burstTaps > 0 && !reduced) nudge.animateTo(0f, keyframes { durationMillis = 440; 1f at 130 })
     }
-    LaunchedEffect(interactive) { if (!interactive) { controlsVisible = false; burstActive = false } }
+    LaunchedEffect(interactive) {
+        if (!interactive) {
+            controlsVisible = false
+            burstActive = false
+            state.endScrubDragging()
+        }
+    }
     val currentInteractive by androidx.compose.runtime.rememberUpdatedState(interactive)
     val currentInactiveTap by androidx.compose.runtime.rememberUpdatedState(onInactiveTap)
     fun toggleControls() { controlsVisible = !controlsVisible; touched() }
@@ -167,6 +173,11 @@ fun VideoContent(
         burstTaps++
     }
     val pip = LocalPictureInPicture.current
+    val scrubbing = state.scrubDragging
+    val scrubPreviewMs = state.scrubPreviewMs
+    LaunchedEffect(state.current?.id) {
+        state.current?.id?.let { ScrubStoryboards.preload(it) }
+    }
     Box(modifier.background(Color.Black).onGloballyPositioned { pip?.videoBounds = it.boundsInWindow() }.pointerInput(state, portraitEdgeScrub) {
         val doubleTapMs = viewConfiguration.doubleTapTimeoutMillis
         coroutineScope {
@@ -222,11 +233,24 @@ fun VideoContent(
             ) {
                 // Under the (transparent until it has a frame) TextureView, so opening or
                 // re-attaching never shows a black void.
-                Thumbnail(state.current?.thumbnail, Modifier.fillMaxSize(), radius = 0)
+                Thumbnail(
+                    state.current?.thumbnail,
+                    Modifier.fillMaxSize().graphicsLayer { alpha = if (scrubbing) 0f else 1f },
+                    radius = 0,
+                )
                 LocalVideoSurface.current(Modifier.fillMaxSize())
+                if (scrubbing && scrubPreviewMs != null) {
+                    ScrubVideoPreview(
+                        state.current?.id,
+                        scrubPreviewMs,
+                        Modifier.fillMaxSize(),
+                    )
+                }
             }
         }
-        SeekBurstPill(burstSide, burstSeconds, burstTaps, burstActive, fullscreen)
+        if (!scrubbing) {
+            SeekBurstPill(burstSide, burstSeconds, burstTaps, burstActive, fullscreen)
+        }
 
         val error = state.error
         if (error != null) {
@@ -236,19 +260,22 @@ fun VideoContent(
 
         val enabled = controlsVisible && interactive
         // With the controls hidden, loading still shows: a small spinner in the middle.
-        if (!controlsVisible && (state.isBuffering || (state.loading && state.details == null))) {
+        if (!scrubbing && !controlsVisible && (state.isBuffering || (state.loading && state.details == null))) {
             CircularProgressIndicator(color = Color.White, strokeWidth = 3.dp, modifier = Modifier.align(Alignment.Center).size(36.dp))
         }
-        SkippedNote(state, Modifier.align(Alignment.TopCenter).padding(top = 12.dp).graphicsLayer { alpha = controlsAlpha() })
+        if (!scrubbing) {
+            SkippedNote(state, Modifier.align(Alignment.TopCenter).padding(top = 12.dp).graphicsLayer { alpha = controlsAlpha() })
+        }
         // The Ask pill stays reachable while the controls are hidden.
-        if (!controlsVisible) {
+        if (!scrubbing && !controlsVisible) {
             state.askSegment?.let { segment ->
                 SkipSegmentPill(segment, enabled = true, modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, top = 12.dp, bottom = 40.dp)) {
                     touched(); state.skipSegment(segment)
                 }
             }
         }
-        Box(Modifier.fillMaxSize().graphicsLayer { alpha = visibleAlpha * controlsAlpha() }) {
+        val chromeAlpha = if (scrubbing) 0f else visibleAlpha * controlsAlpha()
+        Box(Modifier.fillMaxSize().graphicsLayer { alpha = chromeAlpha }) {
             Box(
                 Modifier.fillMaxSize().background(
                     Brush.verticalGradient(
@@ -329,9 +356,12 @@ fun VideoContent(
                     Modifier
                         .align(Alignment.BottomStart)
                         .fillMaxWidth()
-                        .padding(start = 14.dp, end = 8.dp, bottom = EdgeScrubTouchPadAbove + 6.dp),
+                        .padding(start = 14.dp, end = 8.dp, bottom = EdgeScrubTimeRowBottomPad),
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        Modifier.height(EdgeScrubTimeRowHeight),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Text(formatDuration(state.scrubPreviewMs ?: state.positionMs), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         Text(
                             " / " + formatDuration(state.durationMs),
@@ -357,6 +387,7 @@ fun VideoContent(
         if (state.error == null) {
             val scrubActive = controlsVisible && interactive
             val morphFade = controlsAlpha()
+            val scrubFade = if (scrubbing) 1f else morphFade
             val segments = if (SponsorBlock.enabled) state.segments.filter { it.action != SponsorBlock.Action.Off } else emptyList()
             val scrubModifier = if (portraitEdgeScrub) {
                 Modifier
@@ -365,13 +396,13 @@ fun VideoContent(
                     // Fixed on the stage/page seam; the morph layer moves it with the video.
                     .offset(y = EdgeScrubTouchPadBelow)
                     .height(EdgeScrubTouchHeight)
-                    .graphicsLayer { alpha = morphFade }
+                    .graphicsLayer { alpha = scrubFade }
             } else {
                 Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .height(EdgeScrubTouchPadAbove * 2)
-                    .graphicsLayer { alpha = morphFade }
+                    .graphicsLayer { alpha = scrubFade }
             }
             Scrubber(
                 segments = segments,
@@ -385,10 +416,32 @@ fun VideoContent(
                 tapToSeek = false,
                 edgeTouchPadAbove = EdgeScrubTouchPadAbove,
                 onPreview = { state.scrubPreviewMs = it; touched() },
-                onSeek = { state.scrubPreviewMs = null; state.seekTo(it); touched() },
+                onSeek = { state.endScrubDragging(it); touched() },
+                onDraggingChanged = { dragging ->
+                    if (dragging) state.beginScrubDragging()
+                    else state.endScrubDragging()
+                },
                 touchHeight = if (portraitEdgeScrub) EdgeScrubTouchHeight else EdgeScrubTouchPadAbove * 2,
                 modifier = scrubModifier.zIndex(10f),
             )
+        }
+        if (scrubbing && scrubPreviewMs != null) {
+            Box(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(bottom = EdgeScrubTimeRowBottomPad)
+                    .height(EdgeScrubTimeRowHeight)
+                    .zIndex(11f),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    formatDuration(scrubPreviewMs),
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
         }
     }
 }
@@ -816,6 +869,9 @@ private val ScrubberActiveRed = Color(0xFFFF0033)
 internal val EdgeScrubTouchPadAbove = 14.dp
 internal val EdgeScrubTouchPadBelow = 36.dp
 internal val EdgeScrubTouchHeight = EdgeScrubTouchPadAbove + EdgeScrubTouchPadBelow
+/** Current / total row above the bar (fullscreen chip sets the row height). */
+private val EdgeScrubTimeRowBottomPad = EdgeScrubTouchPadAbove + 6.dp
+private val EdgeScrubTimeRowHeight = 34.dp
 
 /**
  * Scrubber: buffered and played tracks, optional knob. On the video stage the bar is pinned to
@@ -831,6 +887,7 @@ private fun Scrubber(
     enabled: Boolean,
     onPreview: (Long) -> Unit,
     onSeek: (Long) -> Unit,
+    onDraggingChanged: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
     active: Boolean = true,
     relativeDrag: Boolean = false,
@@ -876,7 +933,10 @@ private fun Scrubber(
                     var slopAccum = Offset.Zero
                     while (true) {
                         val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: run {
+                            if (dragged) onDraggingChanged(false)
+                            break
+                        }
                         if (!change.pressed) {
                             if (dragged) onSeek((fraction * durationMs).toLong())
                             else if (tapToSeek) {
@@ -884,6 +944,7 @@ private fun Scrubber(
                                 onSeek((x / width * durationMs).toLong())
                             }
                             dragFraction = null
+                            if (dragged) onDraggingChanged(false)
                             break
                         }
                         val delta = change.positionChange()
@@ -891,6 +952,7 @@ private fun Scrubber(
                             slopAccum += delta
                             if (slopAccum.getDistance() < slop) continue
                             dragged = true
+                            onDraggingChanged(true)
                             fraction = (currentPositionMs.toFloat() / duration).coerceIn(0f, 1f)
                             dragFraction = fraction
                             onPreview((fraction * durationMs).toLong())

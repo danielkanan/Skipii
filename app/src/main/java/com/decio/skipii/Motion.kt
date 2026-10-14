@@ -35,6 +35,8 @@ object Motion {
     const val CollapseMs = 380
     /** Overlay controls hide after this long without a touch while playing. */
     const val ControlsHideMs = 2_000L
+    /** Scrub thumb, track tint, and controls hide/show together. */
+    const val ScrubChromeMs = 220
 }
 
 /** True when animations are off system-wide; all motion collapses to instant switches. */

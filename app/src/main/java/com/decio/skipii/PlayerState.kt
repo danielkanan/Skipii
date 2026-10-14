@@ -68,6 +68,9 @@ class PlayerState(private val scope: CoroutineScope) {
     /** While dragging the portrait edge scrubber; also mirrors overlay controls visibility. */
     var scrubPreviewMs by mutableStateOf<Long?>(null)
         internal set
+    var scrubDragging by mutableStateOf(false)
+        internal set
+    private var resumePlayAfterScrub = false
     var videoControlsVisible by mutableStateOf(false)
         internal set
 
@@ -445,6 +448,26 @@ class PlayerState(private val scope: CoroutineScope) {
         val max = player.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
         player.seekTo(ms.coerceIn(0L, max))
         positionMs = player.currentPosition
+    }
+
+    fun beginScrubDragging() {
+        if (scrubDragging) return
+        val player = controller
+        resumePlayAfterScrub = player?.isPlaying == true
+        if (resumePlayAfterScrub) player?.pause()
+        scrubDragging = true
+    }
+
+    /** Ends a scrub gesture; [seekMs] is set on release after a drag. */
+    fun endScrubDragging(seekMs: Long? = null) {
+        if (!scrubDragging) return
+        val player = controller
+        val resume = resumePlayAfterScrub
+        resumePlayAfterScrub = false
+        scrubDragging = false
+        scrubPreviewMs = null
+        if (seekMs != null) seekTo(seekMs)
+        if (resume) player?.play()
     }
 
     /** The ruler is moving: play at [value] now (remembering waits for [commitSpeed]). */

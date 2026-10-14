@@ -23,11 +23,16 @@ data class Profile(val name: String, val handle: String?, val avatar: String?)
 data class PlaylistRef(val id: String, val title: String, val thumbnail: String?, val subtitle: String?)
 
 @Immutable
-data class ChannelRef(val id: String, val name: String, val avatar: String?)
+data class ChannelRef(val id: String, val name: String, val avatar: String?) {
+    val url: String get() = "https://www.youtube.com/channel/$id"
+}
 
 /** One page of a feed plus the token for the next page, if any. */
 @Immutable
-data class FeedPage(val videos: List<VideoItem>, val next: String?)
+data class FeedPage(val videos: List<VideoItem>, val next: String?, val channelHeader: ChannelHeaderMeta? = null)
+
+@Immutable
+data class ChannelHeaderMeta(val handle: String?, val subscribers: Long, val videoCount: Long, val verified: Boolean = false)
 
 enum class LikeStatus { Like, Dislike, None }
 
@@ -238,11 +243,13 @@ object InnerTube {
 
     suspend fun home(next: String? = null) = browse("FEwhat_to_watch", next)
 
-    /** A channel's uploads (Videos tab), members-only ones filtered out like everywhere else. */
     suspend fun channelVideos(channelId: String, continuation: String? = null): FeedPage = withContext(Dispatchers.IO) {
         val body = if (continuation != null) JSONObject().put("continuation", continuation)
         else JSONObject().put("browseId", channelId).put("params", CHANNEL_VIDEOS_TAB)
-        parseFeed(postAny("browse", body))
+        val root = postAny("browse", body)
+        val page = parseFeed(root)
+        val header = if (continuation == null) parseChannelHeader(root) else null
+        FeedPage(page.videos, page.next, header)
     }
 
     /** The channel page's Videos tab selector (as on youtube.com, 2026-10-06). */
@@ -250,6 +257,24 @@ object InnerTube {
     suspend fun subscriptionsFeed(next: String? = null) = browse("FEsubscriptions", next)
     suspend fun history(next: String? = null) = browse("FEhistory", next)
     suspend fun playlist(id: String, next: String? = null) = browse("VL$id", next)
+
+    /** Header avatar from a channel browse (playlist rows often ship no channel thumbnail). */
+    suspend fun channelAvatarUrl(channelId: String): String? = withContext(Dispatchers.IO) {
+        val root = postAny("browse", JSONObject().put("browseId", channelId))
+        parseChannelAvatar(root.optJSONObject("header"))
+    }
+
+    internal fun parseChannelAvatar(header: JSONObject?): String? {
+        if (header == null) return null
+        var url: String? = null
+        header.walk { key, obj ->
+            if (url != null) return@walk
+            if (key == "avatarViewModel" || key == "decoratedAvatarViewModel") {
+                obj.optJSONObject("image")?.optJSONArray("sources")?.widestSourceUrl()?.let { url = it }
+            }
+        }
+        return url?.let { normalizeChannelAvatarUrl(absoluteUrl(it)) }
+    }
 
     suspend fun channels(): List<ChannelRef> = withContext(Dispatchers.IO) {
         val out = LinkedHashMap<String, ChannelRef>()
@@ -477,16 +502,14 @@ object InnerTube {
         val infoRuns = o.optJSONObject("videoInfo")?.optJSONArray("runs")?.let { runs ->
             (0 until runs.length()).map { runs.optJSONObject(it).optString("text") }.filter { it.isNotBlank() && it.trim() != "•" }
         }.orEmpty()
-        val avatar = o.optJSONObject("channelThumbnailSupportedRenderers")
-            ?.optJSONObject("channelThumbnailWithLinkRenderer")?.thumbnails()?.lastOrNull()
-            ?: o.optJSONObject("channelThumbnail")?.thumbnails()?.lastOrNull()
+        val avatar = pickChannelAvatarUrl(o)
         return VideoItem(
             id = id,
             title = o.text("title") ?: return null,
             channel = channelRun?.optString("text").orEmpty(),
             channelUrl = channelId?.takeIf { it.startsWith("UC") }?.let { "https://www.youtube.com/channel/$it" },
-            thumbnail = "https://i.ytimg.com/vi/$id/hqdefault.jpg",
-            avatar = avatar?.let(::absoluteUrl),
+            thumbnail = videoThumbnailUrl(o, id),
+            avatar = avatar?.let { sharpenChannelAvatarUrl(absoluteUrl(it), 96) },
             durationSec = parseDuration(duration),
             views = parseViews(o.text("viewCountText") ?: o.text("shortViewCountText") ?: infoRuns.firstOrNull { it.contains("view") }),
             uploaded = o.text("publishedTimeText") ?: infoRuns.firstOrNull { it.contains("ago") },
@@ -505,20 +528,76 @@ object InnerTube {
                 for (p in 0 until ps.length()) ps.optJSONObject(p)?.optJSONObject("text")?.optString("content")?.ifBlank { null }?.let(parts::add)
             }
         }
-        val avatar = meta.optJSONObject("image")?.collectStrings("url")?.firstOrNull()
+        val avatar = meta.bestChannelAvatarUrl()
         val duration = o.optJSONObject("contentImage")?.collectStrings("text")?.firstOrNull { DURATION.matches(it) }
         return VideoItem(
             id = id,
             title = title,
             channel = parts.firstOrNull { !it.contains("view") && !it.contains("ago") }.orEmpty(),
             channelUrl = o.collectStrings("browseId").firstOrNull { it.startsWith("UC") }?.let { "https://www.youtube.com/channel/$it" },
-            thumbnail = "https://i.ytimg.com/vi/$id/hqdefault.jpg",
-            avatar = avatar?.let(::absoluteUrl),
+            thumbnail = videoThumbnailUrl(o, id),
+            avatar = avatar?.let { sharpenChannelAvatarUrl(absoluteUrl(it), 96) },
             durationSec = parseDuration(duration),
             views = parseViews(parts.firstOrNull { it.contains("view") }),
             uploaded = parts.firstOrNull { it.contains("ago") },
         )
     }
+
+    private fun pickChannelAvatarUrl(o: JSONObject): String? {
+        o.optJSONObject("channelThumbnailSupportedRenderers")
+            ?.optJSONObject("channelThumbnailWithLinkRenderer")?.let { r ->
+                r.thumbnails()?.lastOrNull()?.let { return it }
+                r.optJSONObject("thumbnail")?.thumbnails()?.lastOrNull()?.let { return it }
+            }
+        o.optJSONObject("channelThumbnail")?.thumbnails()?.lastOrNull()?.let { return it }
+        o.optJSONObject("metadata")?.optJSONObject("lockupMetadataViewModel")?.bestChannelAvatarUrl()?.let { return it }
+        o.bestChannelAvatarUrl()?.let { return it }
+        var found: String? = null
+        o.forEachObject { obj ->
+            if (found != null) return@forEachObject
+            obj.optJSONArray("sources")?.widestSourceUrl()?.takeIf { isChannelAvatarUrl(it) }?.let { found = it }
+        }
+        return found
+    }
+
+    private fun isChannelAvatarUrl(url: String): Boolean = when {
+        "ytimg.com/vi/" in url -> false
+        "/ytc/" in url -> true
+        "googleusercontent.com" in url && "-c-k-c0x00ffffff-no-rj" in url -> true
+        "ggpht.com" in url && "=s" in url && "=w" !in url -> true
+        else -> false
+    }
+
+    private fun JSONObject.bestChannelAvatarUrl(): String? =
+        optJSONObject("image")
+            ?.optJSONObject("decoratedAvatarViewModel")
+            ?.optJSONObject("avatar")
+            ?.optJSONObject("avatarViewModel")
+            ?.optJSONObject("image")
+            ?.optJSONArray("sources")
+            ?.widestSourceUrl()
+            ?: optJSONObject("image")?.collectStrings("url")
+                ?.filter { "ggpht.com" in it || "googleusercontent.com" in it }
+                ?.maxByOrNull { channelAvatarEdgePx(it) }
+
+    internal fun pickBestThumbnailUrl(renderer: JSONObject): String? {
+        renderer.bestThumbnailUrl()?.let { return it }
+        renderer.optJSONObject("contentImage")?.bestThumbnailUrl()?.let { return it }
+        renderer.optJSONObject("contentImage")
+            ?.optJSONObject("thumbnailViewModel")
+            ?.optJSONObject("image")
+            ?.optJSONArray("sources")
+            ?.let { pickWidestSourceUrl(it) }
+            ?.let { return it }
+        return renderer.optJSONObject("contentImage")?.collectStrings("url")
+            ?.filter { "ytimg.com/vi/" in it || "googleusercontent.com" in it || "ggpht.com" in it }
+            ?.maxWithOrNull(compareBy({ ytimgThumbnailWidth(it) }, { it.length }))
+    }
+
+    private fun pickWidestSourceUrl(arr: JSONArray): String? = arr.widestSourceUrl()
+
+    private fun videoThumbnailUrl(renderer: JSONObject, videoId: String): String =
+        sharpenFeedThumbnail(pickBestThumbnailUrl(renderer)?.let(::absoluteUrl), videoId)
 
     private val DURATION = Regex("^\\d{1,2}(:\\d{2}){1,2}$")
 
@@ -539,6 +618,75 @@ object InnerTube {
     }
 
     private fun absoluteUrl(url: String) = if (url.startsWith("//")) "https:$url" else url
+
+    internal fun parseChannelHeader(root: JSONObject): ChannelHeaderMeta? {
+        var handle: String? = null
+        var subsText: String? = null
+        var videosText: String? = null
+        fun noteLine(line: String?) {
+            val t = line?.trim()?.ifBlank { null } ?: return
+            val lower = t.lowercase()
+            if (subsText == null && "subscriber" in lower) subsText = t
+            if (videosText == null) {
+                VIDEO_COUNT_IN_LINE.find(lower)?.value?.let { videosText = it }
+            }
+        }
+        fun scanMetadataParts(arr: JSONArray?) {
+            if (arr == null) return
+            for (i in 0 until arr.length()) {
+                noteLine(arr.optJSONObject(i)?.optJSONObject("text")?.optString("content"))
+            }
+        }
+        root.walk { _, obj ->
+            noteLine(obj.text("subscriberCountText"))
+            noteLine(obj.text("videoCountText"))
+            noteLine(obj.optJSONObject("text")?.optString("content"))
+            scanMetadataParts(obj.optJSONArray("metadataParts"))
+            obj.optJSONArray("metadataRows")?.let { rows ->
+                for (r in 0 until rows.length()) {
+                    scanMetadataParts(rows.optJSONObject(r)?.optJSONArray("metadataParts"))
+                }
+            }
+            obj.optString("vanityChannelUrl").takeIf { "@" in it }?.let { url ->
+                handle = handle ?: url.substringAfter("@").substringBefore("?").substringBefore("/").ifBlank { null }
+            }
+            obj.optString("canonicalBaseUrl").takeIf { it.startsWith("/@") }?.let { path ->
+                handle = handle ?: path.removePrefix("/@").substringBefore("/").ifBlank { null }
+            }
+        }
+        if (subsText == null || videosText == null) {
+            for (line in root.collectStrings("content") + root.collectStrings("simpleText")) {
+                noteLine(line)
+            }
+        }
+        val subscribers = parseViews(subsText)
+        val videoCount = parseViews(videosText)
+        val verified = root.optJSONObject("header")?.let { parseChannelVerified(it) } ?: false
+        if (handle == null && subscribers < 0 && videoCount < 0 && !verified) return null
+        return ChannelHeaderMeta(handle, subscribers.coerceAtLeast(0), videoCount.coerceAtLeast(-1), verified)
+    }
+
+    /** Verified / official-artist badge on the channel header (not on videos in the list). */
+    internal fun parseChannelVerified(headerRoot: JSONObject): Boolean {
+        headerRoot.optJSONObject("pageHeaderRenderer")?.optJSONObject("content")
+            ?.optJSONObject("pageHeaderViewModel")?.optJSONObject("title")
+            ?.optJSONObject("dynamicTextViewModel")?.optJSONObject("rendererContext")
+            ?.optJSONObject("accessibilityContext")?.optString("label")?.let { label ->
+                if (VERIFIED_CHANNEL_LABEL.containsMatchIn(label)) return true
+            }
+        var found = false
+        headerRoot.walk { key, obj ->
+            if (found) return@walk
+            if (key == "metadataBadgeRenderer" && isVerifiedChannelBadge(obj.optString("style"))) found = true
+        }
+        return found
+    }
+
+    private fun isVerifiedChannelBadge(style: String): Boolean =
+        style == "BADGE_STYLE_TYPE_VERIFIED" || style == "BADGE_STYLE_TYPE_VERIFIED_ARTIST"
+
+    private val VERIFIED_CHANNEL_LABEL = Regex("verified|official artist", RegexOption.IGNORE_CASE)
+    private val VIDEO_COUNT_IN_LINE = Regex("""[\d,.]+[kmb]?\s+videos\b""", RegexOption.IGNORE_CASE)
 }
 
 // ── JSON helpers ───────────────────────────────────────────────────────────────
@@ -598,6 +746,38 @@ internal fun JSONObject.text(key: String): String? {
 internal fun JSONObject.thumbnails(): List<String>? {
     val arr = optJSONObject("thumbnail")?.optJSONArray("thumbnails") ?: optJSONArray("thumbnails") ?: return null
     return (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("url")?.ifBlank { null } }
+}
+
+internal fun JSONArray.widestSourceUrl(): String? {
+    var best: String? = null
+    var bestW = -1
+    for (i in 0 until length()) {
+        val entry = optJSONObject(i) ?: continue
+        val url = entry.optString("url").ifBlank { continue }
+        val w = entry.optInt("width", channelAvatarEdgePx(url).takeIf { it > 0 } ?: ytimgThumbnailWidth(url))
+        if (w > bestW) {
+            bestW = w
+            best = url
+        }
+    }
+    return best ?: optJSONObject(length() - 1)?.optString("url")?.ifBlank { null }
+}
+
+/** Widest thumbnail entry on a renderer (typically 1280×720 on video cards). */
+internal fun JSONObject.bestThumbnailUrl(): String? {
+    val arr = optJSONObject("thumbnail")?.optJSONArray("thumbnails") ?: optJSONArray("thumbnails") ?: return null
+    var best: String? = null
+    var bestW = -1
+    for (i in 0 until arr.length()) {
+        val entry = arr.optJSONObject(i) ?: continue
+        val url = entry.optString("url").ifBlank { continue }
+        val w = entry.optInt("width", 0)
+        if (w > bestW) {
+            bestW = w
+            best = url
+        }
+    }
+    return best ?: arr.optJSONObject(arr.length() - 1)?.optString("url")?.ifBlank { null }
 }
 
 private fun JSONObject.firstImageSource(): String? = collectStrings("url").firstOrNull { it.contains("ytimg") || it.contains("ggpht") }

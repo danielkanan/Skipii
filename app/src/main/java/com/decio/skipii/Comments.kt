@@ -58,6 +58,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -317,7 +318,13 @@ fun CommentsCard(state: CommentsState, onOpen: () -> Unit) {
  * down move the panel the same way (Derek, 2026-10-10).
  */
 @Composable
-fun CommentsPanel(state: CommentsState, partialTop: Dp, onClose: () -> Unit) {
+fun CommentsPanel(
+    state: CommentsState,
+    partialTop: Dp,
+    onClose: () -> Unit,
+    creatorAvatar: String? = null,
+    creatorName: String = "",
+) {
     val c = MaterialTheme.colorScheme
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
@@ -434,7 +441,9 @@ fun CommentsPanel(state: CommentsState, partialTop: Dp, onClose: () -> Unit) {
             }
             LaunchedEffect(nearEnd) { if (nearEnd) state.loadMore() }
             LazyColumn(state = list, modifier = Modifier.weight(1f).nestedScroll(listPull)) {
-                items(state.comments, key = { it.id }) { comment -> CommentRow(comment, state) }
+                items(state.comments, key = { it.id }) {
+                    CommentRow(it, state, creatorAvatar, creatorName)
+                }
                 if (state.loading || state.hasMore) item {
                     Box(Modifier.fillMaxWidth().padding(20.dp), Alignment.Center) {
                         CircularProgressIndicator(color = c.primary, strokeWidth = 3.dp, modifier = Modifier.size(26.dp))
@@ -526,7 +535,33 @@ private fun Composer(state: CommentsState) {
 }
 
 @Composable
-private fun CommentRow(comment: Comment, state: CommentsState, isReply: Boolean = false) {
+private fun CreatorHeartBadge(avatarUrl: String?, name: String) {
+    val c = MaterialTheme.colorScheme
+    val avatarPx = 22
+    Box(Modifier.size(26.dp), contentAlignment = Alignment.TopStart) {
+        ChannelAvatar(avatarUrl, name, size = avatarPx)
+        Box(
+            Modifier
+                .align(Alignment.BottomEnd)
+                .offset(x = 2.dp, y = 2.dp)
+                .size(13.dp)
+                .clip(CircleShape)
+                .background(c.surface),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Rounded.Favorite, "Hearted by creator", tint = c.primary, modifier = Modifier.size(9.dp))
+        }
+    }
+}
+
+@Composable
+private fun CommentRow(
+    comment: Comment,
+    state: CommentsState,
+    creatorAvatar: String?,
+    creatorName: String,
+    isReply: Boolean = false,
+) {
     val c = MaterialTheme.colorScheme
     Row(Modifier.fillMaxWidth().padding(start = if (isReply) 62.dp else 20.dp, end = 20.dp, top = 10.dp, bottom = 6.dp)) {
         ChannelAvatar(comment.avatar, comment.author, size = if (isReply) 28 else 36)
@@ -563,8 +598,12 @@ private fun CommentRow(comment: Comment, state: CommentsState, isReply: Boolean 
                     }
                 }
                 if (comment.hearted) {
-                    Spacer(Modifier.width(12.dp))
-                    Icon(Icons.Rounded.Favorite, "Hearted by creator", tint = c.primary, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(10.dp))
+                    if (creatorName.isNotBlank()) {
+                        CreatorHeartBadge(creatorAvatar, creatorName)
+                    } else {
+                        Icon(Icons.Rounded.Favorite, "Hearted by creator", tint = c.primary, modifier = Modifier.size(14.dp))
+                    }
                 }
                 if (Account.signedIn && !comment.id.startsWith("local-")) {
                     Spacer(Modifier.width(16.dp))
@@ -600,6 +639,8 @@ private fun CommentRow(comment: Comment, state: CommentsState, isReply: Boolean 
         }
     }
     if (!isReply) {
-        state.replies[comment.id]?.forEach { reply -> CommentRow(reply, state, isReply = true) }
+        state.replies[comment.id]?.forEach { reply ->
+            CommentRow(reply, state, creatorAvatar, creatorName, isReply = true)
+        }
     }
 }

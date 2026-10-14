@@ -158,3 +158,29 @@ object ChannelNames {
 
 /** What the comments show as the author: the real name once known, else the @handle. */
 fun Comment.displayName(): String = name ?: channelId?.let { ChannelNames.known[it] } ?: author
+
+/**
+ * Channel pictures for feed rows that only name the uploader (Watch later / playlistVideoRenderer).
+ * Filled from subscription avatars when available, else one channel browse per id (cached).
+ */
+object ChannelAvatars {
+    val known = mutableStateMapOf<String, String>()
+    private val asked = ConcurrentHashMap.newKeySet<String>()
+    private val gate = Semaphore(4)
+
+    fun resolve(scope: CoroutineScope, videos: List<VideoItem>, seed: Map<String, String?> = emptyMap()) {
+        seed.forEach { (id, url) -> url?.let { known[id] = normalizeChannelAvatarUrl(it) } }
+        val need = videos.filter { it.avatar == null }.mapNotNull { it.channelId() }.toSet()
+        need.filter { it !in known && asked.add(it) }.forEach { id ->
+            scope.launch {
+                gate.withPermit {
+                    withContext(Dispatchers.IO) {
+                        runCatching { InnerTube.channelAvatarUrl(id) }
+                            .onSuccess { url -> if (url != null) known[id] = url }
+                            .onFailure { asked.remove(id) }
+                    }
+                }
+            }
+        }
+    }
+}

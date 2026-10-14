@@ -50,6 +50,18 @@ data class VideoItem(
     val uploaded: String?,
 )
 
+/** `UC…` from a `…/channel/UC…` URL, when InnerTube set [channelUrl]. */
+fun VideoItem.channelId(): String? =
+    channelUrl?.substringAfter("/channel/", "")?.substringBefore('?')?.takeIf { it.startsWith("UC") && it.length > 2 }
+
+fun VideoItem.fromChannel(ref: ChannelRef): Boolean =
+    channelId() == ref.id || channel.equals(ref.name, ignoreCase = true)
+
+/** Channel row avatar: parsed URL, then [ChannelAvatars] lookup for playlist rows with no picture. */
+fun VideoItem.feedAvatar(): String? =
+    avatar?.let(::normalizeChannelAvatarUrl)
+        ?: channelId()?.let { ChannelAvatars.known[it] }
+
 @Immutable
 data class VideoDetails(
     val item: VideoItem,
@@ -74,8 +86,20 @@ data class ChannelDetails(
     val avatar: String?,
     val banner: String?,
     val subscribers: Long,
+    /** Upload count when known from InnerTube; otherwise -1. */
+    val videoCount: Long = -1,
+    /** @handle without the @; from the channel URL or InnerTube. */
+    val handle: String? = null,
+    val verified: Boolean = false,
     val description: String,
     val videosTab: ListLinkHandler?,
+)
+
+fun ChannelDetails.withHeader(header: ChannelHeaderMeta): ChannelDetails = copy(
+    handle = header.handle ?: handle,
+    subscribers = if (header.subscribers > 0) header.subscribers else subscribers,
+    videoCount = if (header.videoCount > 0) header.videoCount else videoCount,
+    verified = header.verified || verified,
 )
 
 @Immutable
@@ -125,7 +149,7 @@ object YouTube {
                 title = info.name,
                 channel = info.uploaderName.orEmpty(),
                 channelUrl = info.uploaderUrl,
-                thumbnail = info.thumbnails.bestUrl(),
+                thumbnail = sharpenFeedThumbnail(info.thumbnails.bestUrl(), id),
                 avatar = info.uploaderAvatars.bestUrl(targetWidth = 96),
                 durationSec = info.duration,
                 views = info.viewCount,
@@ -158,9 +182,16 @@ object YouTube {
             avatar = info.avatars.bestUrl(targetWidth = 176),
             banner = info.banners.bestUrl(targetWidth = 1080),
             subscribers = info.subscriberCount,
+            handle = handleFromChannelUrl(url),
             description = info.description.orEmpty(),
             videosTab = videosTab,
         )
+    }
+
+    private fun handleFromChannelUrl(url: String): String? {
+        val path = url.substringAfter("youtube.com", url).trimStart('/')
+        if (!path.startsWith("@")) return null
+        return path.removePrefix("@").substringBefore('/').substringBefore('?').ifBlank { null }
     }
 
     /**
@@ -184,7 +215,7 @@ object YouTube {
             title = name,
             channel = uploaderName.orEmpty(),
             channelUrl = uploaderUrl,
-            thumbnail = thumbnails.bestUrl(),
+            thumbnail = sharpenFeedThumbnail(thumbnails.bestUrl(), id),
             avatar = uploaderAvatars.bestUrl(targetWidth = 96),
             durationSec = duration,
             views = viewCount,
@@ -193,7 +224,7 @@ object YouTube {
     }
 
     /** The image closest to [targetWidth]: sharp enough for a full-width card, no 4K downloads. */
-    private fun List<Image>.bestUrl(targetWidth: Int = 720): String? =
+    private fun List<Image>.bestUrl(targetWidth: Int = 1080): String? =
         filter { it.width > 0 }.minByOrNull { abs(it.width - targetWidth) }?.url ?: firstOrNull()?.url
 
     /**
@@ -386,4 +417,80 @@ object StreamSelection {
         .map { it.height }
         .distinct()
         .sortedDescending()
+}
+
+// ── Feed thumbnails ────────────────────────────────────────────────────────────
+// InnerTube lockups only list hqdefault variants up to ~336 px (all named hqdefault.jpg).
+// Full-bleed rows need the direct ytimg ladder instead.
+
+private val YT_VIDEO_ID_IN_THUMB = Regex("""i\.ytimg\.com/vi/([\w-]{11})/""")
+
+fun ytVideoIdFromThumbUrl(url: String): String? = YT_VIDEO_ID_IN_THUMB.find(url)?.groupValues?.getOrNull(1)
+
+fun isLowRungYtimgUrl(url: String): Boolean {
+    val path = url.substringBefore('?')
+    return "/hqdefault" in path || "/mqdefault" in path || "/default.jpg" in path
+}
+
+fun ytimgThumbnailWidth(url: String): Int {
+    Regex("=w(\\d+)").find(url)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { return it }
+    return when {
+        "maxresdefault" in url -> 1280
+        "sddefault" in url -> 640
+        "hqdefault" in url -> 480
+        "mqdefault" in url -> 320
+        else -> 0
+    }
+}
+
+/** 640×480; always present for VOD (unlike maxresdefault, which can 200 as a tiny stub). */
+fun feedThumbnailUrl(videoId: String): String = "https://i.ytimg.com/vi/$videoId/sddefault.jpg"
+
+/** Picks a feed thumbnail URL sharp enough for edge-to-edge rows. */
+fun sharpenFeedThumbnail(apiUrl: String?, videoId: String): String {
+    val api = apiUrl?.trim()?.ifBlank { null }
+    // InnerTube lockups only embed hqdefault/mqdefault (often ≤336 px despite the filename).
+    if (api != null && isLowRungYtimgUrl(api)) return feedThumbnailUrl(videoId)
+    if (api != null && ytimgThumbnailWidth(api) >= 720) return api
+    if (api != null && ("googleusercontent.com" in api || "ggpht.com" in api)) {
+        return upscaleGgphtThumbnail(api, 1280)
+    }
+    return feedThumbnailUrl(videoId)
+}
+
+/** Edge length from `yt3.ggpht.com/...=s88-...` channel avatars. */
+fun channelAvatarEdgePx(url: String): Int =
+    Regex("=s(\\d+)").find(url)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+
+/** `ytc` icons on ggpht load more reliably from googleusercontent with the channel cookie suffix. */
+fun normalizeChannelAvatarUrl(url: String): String {
+    if ("/ytc/" !in url || "googleusercontent.com" in url) return url
+    val id = url.substringAfter("/ytc/").substringBefore("=").substringBefore("?").ifBlank { return url }
+    return "https://yt3.googleusercontent.com/ytc/$id=s88-c-k-c0x00ffffff-no-rj"
+}
+
+/** InnerTube feed rows often ship =s68 avatars; the subscriptions rail uses much larger art. */
+fun sharpenChannelAvatarUrl(url: String, minEdgePx: Int): String {
+    val normalized = normalizeChannelAvatarUrl(url)
+    val m = Regex("=s(\\d+)").find(normalized) ?: return normalized
+    val current = m.groupValues[1].toIntOrNull() ?: return normalized
+    if ("/ytc/" in normalized && current > 96 && "googleusercontent.com" !in normalized) {
+        return normalized.replace(Regex("=s\\d+"), "=s96")
+    }
+    if (current >= minEdgePx) return normalized
+    // Legacy `ytc/` icons 404 above ~96; googleusercontent channel art can go much higher.
+    val ceiling = if ("/ytc/" in normalized && "googleusercontent.com" !in normalized) 96 else 800
+    val edge = minOf(minEdgePx, ceiling).coerceAtLeast(current)
+    return normalized.replace(Regex("=s\\d+"), "=s$edge")
+}
+
+internal fun upscaleGgphtThumbnail(url: String, targetWidth: Int): String {
+    val current = ytimgThumbnailWidth(url)
+    if (current >= targetWidth) return url
+    val height = targetWidth * 9 / 16
+    return if ("=w" in url) {
+        url.replace(Regex("=w\\d+-h\\d+"), "=w$targetWidth-h$height")
+    } else {
+        "$url=w$targetWidth-h$height"
+    }
 }

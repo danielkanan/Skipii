@@ -4,10 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.ThumbUp
@@ -48,6 +46,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -122,51 +121,170 @@ fun SubscriptionsScreen(
     onSignIn: () -> Unit,
     onAccount: () -> Unit,
     scrollToTop: Int = 0,
+    onOpenAllSubscriptions: () -> Unit = {},
 ) {
     val signedIn = Account.signedIn
+    var selectedChannelId by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(signedIn) {
         if (signedIn) {
             lib.subscriptions.ensureLoaded()
             if (lib.channels.isEmpty()) lib.loadChannels()
+        } else {
+            selectedChannelId = null
         }
     }
+    LaunchedEffect(scrollToTop) { selectedChannelId = null }
+    val selectedChannel = remember(selectedChannelId, lib.channels) {
+        selectedChannelId?.let { id -> lib.channels.find { it.id == id } }
+    }
+    val filteredVideos = remember(lib.subscriptions.videos, selectedChannel) {
+        val ch = selectedChannel ?: return@remember null
+        lib.subscriptions.videos.filter { it.fromChannel(ch) }
+    }
     CollapsingHeaderLayout(
-        resetKey = scrollToTop to lib.subscriptions.generation,
-        header = { ScreenHeader(title = "Subscriptions") { AccountAction(onAccount) } },
-    ) { top ->
-        if (signedIn) {
-            FeedList(lib.subscriptions, contentPadding.withTop(top), onOpen, header = {
-                // Always present (empty until loaded) so its arrival never shifts the list.
-                item(key = "channels") { if (lib.channels.isNotEmpty()) ChannelRail(lib.channels) }
-            }, scrollToTop = scrollToTop, indicatorTop = top)
-        } else {
-            LazyColumn(contentPadding = contentPadding.withTop(top)) {
-                item {
-                    EmptyState(
-                        icon = Icons.Rounded.Subscriptions,
-                        title = "Your subscriptions",
-                        body = "Sign in with Google to see new videos from the channels you follow.",
-                        action = { PillButton("Sign in with Google", onSignIn) },
+        resetKey = scrollToTop to listOf(lib.subscriptions.generation, selectedChannelId, lib.channels.size),
+        header = {
+            Column(Modifier.fillMaxWidth()) {
+                ScreenHeader(title = "Subscriptions") { AccountAction(onAccount) }
+                if (signedIn && lib.channels.isNotEmpty()) {
+                    SubscriptionsChannelStrip(
+                        channels = lib.channels,
+                        selectedId = selectedChannelId,
+                        onSelect = { id -> selectedChannelId = id },
+                        onAll = onOpenAllSubscriptions,
                     )
                 }
             }
+        },
+    ) { top ->
+            if (signedIn) {
+                when {
+                    selectedChannel != null && filteredVideos.isNullOrEmpty() && !lib.subscriptions.loading -> {
+                        Box(Modifier.fillMaxSize().padding(contentPadding.withTop(top))) {
+                            EmptyState(
+                                icon = Icons.Rounded.Subscriptions,
+                                title = "Nothing recent",
+                                body = "No new uploads from ${selectedChannel.name} in this feed yet.",
+                            )
+                        }
+                    }
+                    else -> FeedList(
+                        lib.subscriptions,
+                        contentPadding.withTop(top),
+                        onOpen,
+                        scrollToTop = scrollToTop,
+                        indicatorTop = top,
+                        videos = filteredVideos,
+                        filterScrollKey = selectedChannelId,
+                    )
+                }
+            } else {
+                LazyColumn(contentPadding = contentPadding.withTop(top)) {
+                    item {
+                        EmptyState(
+                            icon = Icons.Rounded.Subscriptions,
+                            title = "Your subscriptions",
+                            body = "Sign in with Google to see new videos from the channels you follow.",
+                            action = { PillButton("Sign in with Google", onSignIn) },
+                        )
+                    }
+                }
+            }
+        }
+}
+
+@Composable
+private fun SubscriptionsChannelStrip(
+    channels: List<ChannelRef>,
+    selectedId: String?,
+    onSelect: (String?) -> Unit,
+    onAll: () -> Unit,
+) {
+    val c = MaterialTheme.colorScheme
+    Box(Modifier.fillMaxWidth()) {
+        LazyRow(
+            contentPadding = PaddingValues(start = 16.dp, end = 76.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier.padding(top = 2.dp, bottom = 10.dp),
+        ) {
+            items(channels, key = { it.id }) { ch ->
+                val selected = ch.id == selectedId
+                Column(
+                    Modifier
+                        .width(68.dp)
+                        .pressable { onSelect(if (selected) null else ch.id) },
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    ChannelAvatar(ch.avatar, ch.name, size = 56, selected = selected, ringSlot = true)
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        ch.name,
+                        fontSize = 12.sp,
+                        color = c.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+        Row(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 12.dp)
+                .pressable(onClick = onAll)
+                .clip(CircleShape)
+                .background(c.surfaceContainerHigh)
+                .padding(horizontal = 14.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("All", color = c.onSurface, fontWeight = FontWeight.Medium, fontSize = 13.sp)
         }
     }
 }
 
 @Composable
-private fun ChannelRail(channels: List<ChannelRef>) {
+fun AllSubscriptionsScreen(
+    channels: List<ChannelRef>,
+    contentPadding: PaddingValues,
+    onBack: () -> Unit,
+) {
     val c = MaterialTheme.colorScheme
-    LazyRow(
-        contentPadding = PaddingValues(horizontal = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-        modifier = Modifier.padding(top = 2.dp, bottom = 10.dp),
-    ) {
-        items(channels, key = { it.id }) { ch ->
-            Column(Modifier.width(64.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                ChannelAvatar(ch.avatar, ch.name, size = 56)
-                Spacer(Modifier.height(6.dp))
-                Text(ch.name, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = c.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    val openChannel = LocalChannelOpener.current
+    Box(Modifier.fillMaxSize().background(c.surface)) {
+        Column(Modifier.fillMaxSize()) {
+            BackScreenHeader(onBack = onBack) {
+                Text(
+                    "All subscriptions",
+                    modifier = Modifier.weight(1f),
+                    fontFamily = RoundedHeavy,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 24.sp,
+                    letterSpacing = (-0.8).sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            LazyColumn(contentPadding = contentPadding) {
+                items(channels, key = { it.id }) { ch ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .pressable(onClick = { openChannel(ch.url) })
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        ChannelAvatar(ch.avatar, ch.name, size = 48)
+                        Spacer(Modifier.width(14.dp))
+                        Text(
+                            ch.name,
+                            modifier = Modifier.weight(1f),
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 16.sp,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
             }
         }
     }
@@ -187,6 +305,7 @@ fun LibraryScreen(
         if (signedIn) {
             lib.history.ensureLoaded()
             if (lib.playlists.isEmpty()) lib.loadPlaylists()
+            if (lib.channels.isEmpty()) lib.loadChannels()
         }
     }
     CollapsingHeaderLayout(
@@ -294,20 +413,24 @@ private fun PlaylistTile(playlist: PlaylistRef, modifier: Modifier, onClick: () 
 
 /** A playlist's videos (Watch later, Liked, or the user's own). */
 @Composable
-fun PlaylistScreen(playlist: PlaylistRef, feed: FeedState, contentPadding: PaddingValues, onBack: () -> Unit, onOpen: (VideoItem) -> Unit) {
+fun PlaylistScreen(
+    playlist: PlaylistRef,
+    feed: FeedState,
+    contentPadding: PaddingValues,
+    onBack: () -> Unit,
+    onOpen: (VideoItem) -> Unit,
+    channelAvatarSeed: Map<String, String?> = emptyMap(),
+) {
     LaunchedEffect(playlist.id) { feed.ensureLoaded() }
+    val avatarSeed = remember(channelAvatarSeed) { channelAvatarSeed }
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
     CollapsingHeaderLayout(
         resetKey = feed.generation,
         header = {
-        Row(
-            Modifier.fillMaxWidth().statusBarsPadding().padding(start = 12.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            CircleAction(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onBack)
-            Spacer(Modifier.width(12.dp))
+        BackScreenHeader(onBack = onBack) {
             Text(
                 playlist.title,
+                modifier = Modifier.weight(1f),
                 fontFamily = RoundedHeavy, fontWeight = FontWeight.ExtraBold, fontSize = 24.sp, letterSpacing = (-0.8).sp,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
@@ -317,7 +440,7 @@ fun PlaylistScreen(playlist: PlaylistRef, feed: FeedState, contentPadding: Paddi
         if (feed.videos.isEmpty() && !feed.loading && feed.error == null && !feed.hasMore) {
             Box(Modifier.padding(top = top)) { EmptyState(Icons.Rounded.VideoLibrary, "Nothing here yet", "Videos you add to this playlist will show up here.") }
         } else {
-            FeedList(feed, contentPadding.withTop(top), onOpen, indicatorTop = top)
+            FeedList(feed, contentPadding.withTop(top), onOpen, indicatorTop = top, channelAvatarSeed = avatarSeed)
         }
     }
     }

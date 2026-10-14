@@ -12,14 +12,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material3.CircularProgressIndicator
@@ -71,12 +69,21 @@ class ChannelState(val url: String, private val scope: CoroutineScope) {
         error = null
         scope.launch {
             runCatching { YouTube.channel(url) }
-                .onSuccess { d ->
+                .onSuccess { base ->
+                    var d = base
                     details = d
                     if (Account.signedIn) launch { subscribed = runCatching { InnerTube.channelSubscribed(d.id) }.getOrNull() }
                     runCatching { YouTube.channelVideos(d, null) }
-                        .onSuccess { p -> videos = p.videos; next = p.next }
-                        .onFailure { error = YouTube.friendlyError(it) }
+                        .onSuccess { p ->
+                            videos = p.videos
+                            next = p.next
+                            p.channelHeader?.let { d = d.withHeader(it) }
+                            details = d
+                        }
+                        .onFailure {
+                            details = d
+                            error = YouTube.friendlyError(it)
+                        }
                 }
                 .onFailure { error = YouTube.friendlyError(it) }
             loading = false
@@ -121,16 +128,14 @@ fun ChannelScreen(state: ChannelState, contentPadding: PaddingValues, onBack: ()
     Box(Modifier.fillMaxSize().background(c.surface)) {
     CollapsingHeaderLayout(
         header = {
-        Row(
-            Modifier.fillMaxWidth().statusBarsPadding().padding(start = 12.dp, end = 16.dp, top = 12.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            CircleAction(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onBack)
-            Spacer(Modifier.width(12.dp))
-            Text(
+        BackScreenHeader(onBack = onBack) {
+            ChannelNameWithBadge(
                 state.details?.name.orEmpty(),
-                fontFamily = RoundedHeavy, fontWeight = FontWeight.ExtraBold, fontSize = 22.sp, letterSpacing = (-0.6).sp,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                verified = state.details?.verified == true,
+                modifier = Modifier.weight(1f),
+                fontSize = 22.sp,
+                maxLines = 1,
+                letterSpacing = (-0.6).sp,
             )
         }
         },
@@ -155,8 +160,14 @@ fun ChannelScreen(state: ChannelState, contentPadding: PaddingValues, onBack: ()
                             ChannelAvatar(d.avatar, d.name, size = 76)
                             Spacer(Modifier.width(14.dp))
                             Column(Modifier.weight(1f)) {
-                                Text(d.name, fontFamily = RoundedHeavy, fontWeight = FontWeight.ExtraBold, fontSize = 20.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                if (d.subscribers > 0) Text("${formatCount(d.subscribers)} subscribers", color = c.onSurfaceVariant, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                ChannelNameWithBadge(d.name, verified = d.verified, maxLines = 2)
+                                d.handle?.let { handle ->
+                                    Spacer(Modifier.height(2.dp))
+                                    Text("@$handle", color = c.onSurfaceVariant, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                                channelStatLine(d.subscribers, d.videoCount).takeIf { it.isNotBlank() }?.let { stats ->
+                                    Text(stats, color = c.onSurfaceVariant, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                }
                             }
                         }
                         state.subscribed?.let { subscribed ->

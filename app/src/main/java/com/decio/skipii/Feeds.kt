@@ -21,6 +21,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -186,26 +187,37 @@ fun FeedList(
     pullToRefresh: Boolean = true,
     /** Collapsing header height: the refresh spinner appears just below it. */
     indicatorTop: Dp = 0.dp,
+    /** When set, shown instead of [FeedState.videos] (e.g. subscriptions channel filter). */
+    videos: List<VideoItem>? = null,
+    /** Scrolls the list to the top when this changes (e.g. subscriptions channel pick). */
+    filterScrollKey: Any? = null,
+    /** Subscription channel avatars to avoid extra lookups on playlist rows. */
+    channelAvatarSeed: Map<String, String?> = emptyMap(),
 ) {
     val c = MaterialTheme.colorScheme
+    val listVideos = videos ?: feed.videos
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(listVideos, channelAvatarSeed) {
+        ChannelAvatars.resolve(scope, listVideos, channelAvatarSeed)
+    }
     val list = rememberScrollToTop(scrollToTop)
     // Fresh content always starts at the top (first load and every refresh).
-    LaunchedEffect(feed.generation) { list.scrollToItem(0) }
+    LaunchedEffect(feed.generation, filterScrollKey) { list.scrollToItem(0) }
     val nearEnd by remember {
         derivedStateOf {
             val last = list.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
             last >= list.layoutInfo.totalItemsCount - 4
         }
     }
-    LaunchedEffect(nearEnd, feed.videos.size) { if (nearEnd && feed.videos.isNotEmpty()) feed.loadMore() }
+    LaunchedEffect(nearEnd, listVideos.size) { if (nearEnd && listVideos.isNotEmpty()) feed.loadMore() }
     PullToRefresh(enabled = pullToRefresh, refreshing = feed.refreshing, onRefresh = feed::refresh, topPadding = indicatorTop) {
     LazyColumn(state = list, contentPadding = contentPadding) {
         header()
-        items(feed.videos, key = { it.id }) { video -> VideoCard(video, onClick = { onOpen(video) }) }
+        items(listVideos, key = { it.id }) { video -> VideoCard(video, onClick = { onOpen(video) }) }
         when {
             // No keys on these trailing items: a keyed loader at index 0 makes LazyColumn
             // hold it in view when videos arrive above it, landing at the bottom of the page.
-            feed.error != null && feed.videos.isEmpty() -> item {
+            feed.error != null && listVideos.isEmpty() -> item {
                 EmptyState(
                     icon = Icons.Rounded.CloudOff,
                     title = "Couldn't load this",

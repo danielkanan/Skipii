@@ -282,7 +282,14 @@ fun PlayerScreen(
         if (state.sheet == PlayerSheet.Comments) {
             val screenW = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp
             val videoBottom = top + StageTopGap + (screenW - StageSideGap * 2) / state.stageAspect
-            CommentsPanel(state.comments, partialTop = videoBottom + 10.dp, onClose = { state.sheet = null })
+            val item = state.details?.item
+            CommentsPanel(
+                state.comments,
+                partialTop = videoBottom + 10.dp,
+                onClose = { state.sheet = null },
+                creatorAvatar = item?.avatar,
+                creatorName = item?.channel.orEmpty(),
+            )
         }
     }
 }

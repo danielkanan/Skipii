@@ -147,6 +147,7 @@ fun SkipiiApp() {
     var accountSheet by remember { mutableStateOf(false) }
     var openPlaylist by remember { mutableStateOf<PlaylistRef?>(null) }
     var openChannel by remember { mutableStateOf<String?>(null) }
+    var openAllSubscriptions by remember { mutableStateOf(false) }
     // Kept after closing so the page can slide out with its content.
     var channelState by remember { mutableStateOf<ChannelState?>(null) }
     val playlistFeed = remember(openPlaylist?.id) { openPlaylist?.let { lib.playlistFeed(it.id) } }
@@ -216,7 +217,10 @@ fun SkipiiApp() {
     fun toggleFullscreen() = if (showFullscreen) orientation.exitFullscreen() else orientation.enterFullscreen()
 
     BackHandler(enabled = player.expanded) { player.expanded = false }
-    BackHandler(enabled = !player.expanded && tab != Tab.Home && openPlaylist == null) { tab = Tab.Home }
+    BackHandler(enabled = !player.expanded && openAllSubscriptions && openChannel == null) { openAllSubscriptions = false }
+    BackHandler(enabled = !player.expanded && tab != Tab.Home && openPlaylist == null && openChannel == null && !openAllSubscriptions) {
+        tab = Tab.Home
+    }
     BackHandler(enabled = !player.expanded && openPlaylist != null) { openPlaylist = null }
     BackHandler(enabled = signingIn) { signingIn = false }
     BackHandler(enabled = !player.expanded && openChannel != null) { openChannel = null }
@@ -304,6 +308,7 @@ fun SkipiiApp() {
                     lib, contentPadding, onOpen = player::open,
                     onSignIn = { signingIn = true }, onAccount = { accountSheet = true },
                     scrollToTop = scrollToTop[Tab.Subscriptions] ?: 0,
+                    onOpenAllSubscriptions = { openAllSubscriptions = true },
                 )
                 Tab.Search -> SearchScreen(search, contentPadding, onOpen = player::open, scrollToTop = scrollToTop[Tab.Search] ?: 0)
                 Tab.Library -> LibraryScreen(
@@ -323,8 +328,26 @@ fun SkipiiApp() {
             val pl = openPlaylist
             val feed = playlistFeed
             if (pl != null && feed != null) {
-                PlaylistScreen(pl, feed, contentPadding, onBack = { openPlaylist = null }, onOpen = player::open)
+                PlaylistScreen(
+                    pl, feed, contentPadding,
+                    onBack = { openPlaylist = null },
+                    onOpen = player::open,
+                    channelAvatarSeed = lib.channels.associate { it.id to it.avatar },
+                )
             }
+        }
+
+        // All subscriptions sits under an open channel so Back from the channel returns here.
+        AnimatedVisibility(
+            visible = openAllSubscriptions,
+            enter = if (reduced) fadeIn(snap()) else slideInHorizontally(tween(340, easing = Motion.Emphasized)) { it } + fadeIn(tween(120)),
+            exit = if (reduced) fadeOut(snap()) else slideOutHorizontally(tween(300, easing = Motion.Emphasized)) { it } + fadeOut(tween(220)),
+        ) {
+            AllSubscriptionsScreen(
+                channels = lib.channels,
+                contentPadding = contentPadding,
+                onBack = { openAllSubscriptions = false },
+            )
         }
 
         // A channel opens the same way, over everything below the mini-player.
@@ -408,8 +431,9 @@ fun SkipiiApp() {
                     // Re-tapping the current tab: back out of a playlist, else scroll to top.
                     selected == tab && openChannel != null -> openChannel = null
                     selected == tab && openPlaylist != null -> openPlaylist = null
+                    selected == tab && openAllSubscriptions -> openAllSubscriptions = false
                     selected == tab -> scrollToTop[selected] = (scrollToTop[selected] ?: 0) + 1
-                    else -> { openPlaylist = null; openChannel = null; tab = selected }
+                    else -> { openPlaylist = null; openChannel = null; openAllSubscriptions = false; tab = selected }
                 }
             },
             modifier = Modifier.align(Alignment.BottomCenter).padding(start = 16.dp, end = 16.dp, bottom = stackBottom),

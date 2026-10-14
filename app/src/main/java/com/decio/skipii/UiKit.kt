@@ -6,10 +6,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -20,7 +23,9 @@ import androidx.compose.foundation.layout.windowInsetsBottomHeight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.FastForward
+import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -46,9 +51,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalDensity
 import coil.compose.AsyncImage
+import kotlin.math.roundToInt
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
@@ -82,6 +91,8 @@ val SunnyShape = LobedShape(lobes = 8, depth = 0.05f)
 
 // ── Header ─────────────────────────────────────────────────────────────────────
 
+private val ScreenHeaderHorizontal = 16.dp
+
 /** Seamless header: same surface as the page, heavy title, round 44 dp actions. */
 @Composable
 fun ScreenHeader(
@@ -93,7 +104,7 @@ fun ScreenHeader(
         modifier = Modifier
             .fillMaxWidth()
             .statusBarsPadding()
-            .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 12.dp)
+            .padding(horizontal = ScreenHeaderHorizontal, vertical = 12.dp)
             .height(44.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -111,6 +122,26 @@ fun ScreenHeader(
             maxLines = 1,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { actions() }
+    }
+}
+
+/** Back + title row for playlist, channel, and other overlay pages — same insets as [ScreenHeader]. */
+@Composable
+fun BackScreenHeader(
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable RowScope.() -> Unit,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .padding(horizontal = ScreenHeaderHorizontal, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CircleAction(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onBack)
+        Spacer(Modifier.width(12.dp))
+        content()
     }
 }
 
@@ -199,9 +230,13 @@ fun Modifier.prefetchOnPress(videoId: String): Modifier = pointerInput(videoId) 
 val LocalVideoMenu = staticCompositionLocalOf<(VideoItem) -> Unit> { {} }
 
 @Composable
-fun Thumbnail(url: String?, modifier: Modifier = Modifier, radius: Int = 22) {
+fun Thumbnail(url: String?, modifier: Modifier = Modifier, radius: Int = 22, videoId: String? = null) {
+    val model = remember(url, videoId) {
+        val id = videoId ?: url?.let(::ytVideoIdFromThumbUrl)
+        if (id != null) sharpenFeedThumbnail(url, id) else url
+    }
     AsyncImage(
-        model = url,
+        model = model,
         contentDescription = null,
         contentScale = ContentScale.Crop,
         modifier = modifier
@@ -213,13 +248,20 @@ fun Thumbnail(url: String?, modifier: Modifier = Modifier, radius: Int = 22) {
 @Composable
 fun DurationPill(seconds: Long, modifier: Modifier = Modifier, small: Boolean = false) {
     if (seconds <= 0) return
+    val fontSize = if (small) 10.5.sp else 11.5.sp
     Box(
         modifier = modifier
-            .clip(CircleShape)
+            .clip(RoundedCornerShape(4.dp))
             .background(Color.Black.copy(alpha = 0.72f))
-            .padding(horizontal = if (small) 7.dp else 9.dp, vertical = if (small) 2.dp else 4.dp),
+            .padding(horizontal = if (small) 5.dp else 6.dp, vertical = if (small) 1.dp else 2.dp),
     ) {
-        Text(formatDuration(seconds * 1000), color = Color.White, fontSize = if (small) 11.sp else 12.sp, fontWeight = FontWeight.Bold)
+        Text(
+            formatDuration(seconds * 1000),
+            color = Color.White,
+            fontSize = fontSize,
+            lineHeight = fontSize,
+            fontWeight = FontWeight.Bold,
+        )
     }
 }
 
@@ -228,8 +270,25 @@ fun DurationPill(seconds: Long, modifier: Modifier = Modifier, small: Boolean = 
  * Only someone with no picture at all gets the cookie-shaped initial.
  */
 @Composable
-fun ChannelAvatar(url: String?, name: String, size: Int = 40) {
+fun ChannelAvatar(
+    url: String?,
+    name: String,
+    size: Int = 40,
+    selected: Boolean = false,
+    /** Reserve space for a selection ring so layout does not shift when [selected] toggles. */
+    ringSlot: Boolean = false,
+) {
     val c = MaterialTheme.colorScheme
+    val density = LocalDensity.current
+    val minPx = remember(size, density) {
+        (size.dp.value * density.density * 2f).roundToInt().coerceIn(88, 240)
+    }
+    val model = remember(url, minPx) { url?.let { sharpenChannelAvatarUrl(normalizeChannelAvatarUrl(it), minPx) } }
+    val outer = if (ringSlot) (size + 4).dp else size.dp
+    Box(modifier = Modifier.size(outer), contentAlignment = Alignment.Center) {
+        if (selected) {
+            Box(Modifier.fillMaxSize().border(2.dp, Color.White, CircleShape))
+        }
     Box(
         modifier = Modifier.size(size.dp).clip(if (url != null) CircleShape else CookieShape).background(c.tertiaryContainer),
         contentAlignment = Alignment.Center,
@@ -240,43 +299,40 @@ fun ChannelAvatar(url: String?, name: String, size: Int = 40) {
             fontWeight = FontWeight.Black,
             fontSize = (size * 0.4f).sp,
         )
-        if (url != null) {
-            AsyncImage(model = url, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.size(size.dp))
+        if (model != null) {
+            AsyncImage(model = model, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.size(size.dp))
         }
+    }
     }
 }
 
-/** Full-width feed card: rounded thumbnail inside a 28 dp card, then avatar + title + meta. */
+/** Full-width feed row: edge-to-edge thumbnail, then avatar + title + meta. */
 @Composable
 fun VideoCard(video: VideoItem, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val c = MaterialTheme.colorScheme
     val menu = LocalVideoMenu.current
-    val shape = RoundedCornerShape(28.dp)
     Column(
         modifier = modifier
-            .padding(horizontal = 16.dp, vertical = 7.dp)
             .fillMaxWidth()
             .prefetchOnPress(video.id)
             .pressable(pressedScale = 0.97f, onLongClick = { menu(video) }, onClick = onClick)
-            .clip(shape)
-            .background(c.surfaceContainerLow)
-            .padding(6.dp),
+            .padding(bottom = 16.dp),
     ) {
         Box {
-            Thumbnail(video.thumbnail, Modifier.fillMaxWidth().aspectRatio(16f / 9f))
-            DurationPill(video.durationSec, Modifier.align(Alignment.BottomEnd).padding(10.dp))
+            Thumbnail(video.thumbnail, Modifier.fillMaxWidth().aspectRatio(16f / 9f), radius = 0, videoId = video.id)
+            DurationPill(video.durationSec, Modifier.align(Alignment.BottomEnd).padding(6.dp))
             ResumeBar(video.id, Modifier.align(Alignment.BottomStart))
         }
-        Row(modifier = Modifier.padding(start = 8.dp, end = 6.dp, top = 12.dp, bottom = 10.dp)) {
+        Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             val openChannel = LocalChannelOpener.current
             Box(Modifier.pressable(enabled = video.channelUrl != null) { video.channelUrl?.let(openChannel) }) {
-                ChannelAvatar(video.avatar, video.channel)
+                ChannelAvatar(video.feedAvatar(), video.channel)
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(
                     video.title,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.Medium,
                     fontSize = 16.sp,
                     lineHeight = 20.sp,
                     maxLines = 2,
@@ -287,7 +343,6 @@ fun VideoCard(video: VideoItem, onClick: () -> Unit, modifier: Modifier = Modifi
                     metaLine(video.channel, video.views, video.uploaded),
                     color = c.onSurfaceVariant,
                     fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -335,8 +390,8 @@ fun VideoRow(video: VideoItem, onClick: () -> Unit, trailing: (@Composable () ->
 fun ResumeBar(videoId: String, modifier: Modifier = Modifier) {
     val progress = ResumeStore.progress(videoId) ?: return
     val c = MaterialTheme.colorScheme
-    Box(modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp).height(4.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.45f))) {
-        Box(Modifier.fillMaxWidth(progress).height(4.dp).clip(CircleShape).background(c.primary))
+    Box(modifier.fillMaxWidth().height(3.dp).background(Color.White.copy(alpha = 0.45f))) {
+        Box(Modifier.fillMaxWidth(progress).fillMaxHeight().background(c.primary))
     }
 }
 
@@ -409,8 +464,59 @@ fun formatCount(n: Long): String = when {
     else -> trimmed(n / 1_000_000_000.0) + "B"
 }
 
+/** Channel subscriber / video counts (e.g. 4.85M, 1.1K). */
+fun formatStatCount(n: Long): String = when {
+    n < 1_000 -> n.toString()
+    n < 1_000_000 -> statCompact(n / 1_000.0, "K")
+    n < 1_000_000_000 -> statCompact(n / 1_000_000.0, "M")
+    else -> statCompact(n / 1_000_000_000.0, "B")
+}
+
+@Composable
+fun ChannelNameWithBadge(
+    name: String,
+    verified: Boolean,
+    modifier: Modifier = Modifier,
+    fontSize: TextUnit = 20.sp,
+    maxLines: Int = 2,
+    letterSpacing: TextUnit = TextUnit.Unspecified,
+) {
+    val c = MaterialTheme.colorScheme
+    val badge = if (fontSize >= 22.sp) 18.dp else 16.dp
+    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            name,
+            modifier = Modifier.weight(1f, fill = false),
+            fontFamily = RoundedHeavy,
+            fontWeight = FontWeight.ExtraBold,
+            fontSize = fontSize,
+            letterSpacing = letterSpacing,
+            maxLines = maxLines,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (verified) {
+            Spacer(Modifier.width(5.dp))
+            Icon(Icons.Rounded.Verified, "Verified", Modifier.size(badge), tint = c.onSurfaceVariant)
+        }
+    }
+}
+
+fun channelStatLine(subscribers: Long, videoCount: Long): String = listOfNotNull(
+    subscribers.takeIf { it > 0 }?.let { "${formatStatCount(it)} subscribers" },
+    videoCount.takeIf { it > 0 }?.let { "${formatStatCount(it)} videos" },
+).joinToString(" · ")
+
 private fun trimmed(v: Double): String =
     if (v >= 100 || v == Math.floor(v)) v.toLong().toString() else "%.1f".format(v).removeSuffix(".0")
+
+private fun statCompact(v: Double, suffix: String): String {
+    val text = when {
+        v >= 100 -> "%.0f".format(v)
+        v >= 10 -> "%.1f".format(v)
+        else -> "%.2f".format(v)
+    }.trimEnd('0').trimEnd('.')
+    return text + suffix
+}
 
 fun metaLine(channel: String, views: Long, uploaded: String?): String =
     listOfNotNull(

@@ -24,6 +24,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -50,7 +53,9 @@ import androidx.compose.material.icons.rounded.PictureInPictureAlt
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Replay10
 import androidx.compose.material.icons.rounded.SkipNext
+import androidx.compose.ui.composed
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -173,6 +178,7 @@ fun VideoContent(
         burstTaps++
     }
     val pip = LocalPictureInPicture.current
+    val fullscreenControlsScrub = fullscreen && !portraitEdgeScrub
     val scrubbing = state.scrubDragging
     val scrubPreviewMs = state.scrubPreviewMs
     LaunchedEffect(state.current?.id) {
@@ -286,7 +292,11 @@ fun VideoContent(
                     ),
                 ),
             )
-            val edge = if (fullscreen) Modifier.windowInsetsPadding(WindowInsets.displayCutout).padding(horizontal = 12.dp, vertical = 8.dp) else Modifier
+            val edge = if (fullscreen) {
+                Modifier.fullscreenControlsHorizontalInsets().padding(vertical = FullscreenControlsVerticalPad)
+            } else {
+                Modifier
+            }
             Box(Modifier.fillMaxSize().then(edge)) {
                 // Top row: minimize / exit fullscreen, title (fullscreen), quality.
                 Row(
@@ -356,7 +366,12 @@ fun VideoContent(
                     Modifier
                         .align(Alignment.BottomStart)
                         .fillMaxWidth()
-                        .padding(start = 14.dp, end = 8.dp, bottom = EdgeScrubTimeRowBottomPad),
+                        .padding(
+                            start = if (fullscreenControlsScrub) 0.dp else 14.dp,
+                            end = if (fullscreenControlsScrub) 0.dp else 8.dp,
+                            bottom = EdgeScrubTimeRowBottomPad +
+                                if (fullscreenControlsScrub) FullscreenControlsLift else 0.dp,
+                        ),
                 ) {
                     Row(
                         Modifier.height(EdgeScrubTimeRowHeight),
@@ -384,21 +399,28 @@ fun VideoContent(
                 }
             }
         }
-        if (state.error == null) {
+        // Portrait keeps the thin edge bar when controls are hidden; fullscreen hides the scrubber until controls (or a drag) show.
+        if (state.error == null && (!fullscreenControlsScrub || controlsVisible || scrubbing)) {
             val scrubActive = controlsVisible && interactive
             val morphFade = controlsAlpha()
             val scrubFade = if (scrubbing) 1f else morphFade
             val segments = if (SponsorBlock.enabled) state.segments.filter { it.action != SponsorBlock.Action.Off } else emptyList()
-            val scrubModifier = if (portraitEdgeScrub) {
-                Modifier
+            val scrubModifier = when {
+                portraitEdgeScrub -> Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     // Fixed on the stage/page seam; the morph layer moves it with the video.
                     .offset(y = EdgeScrubTouchPadBelow)
                     .height(EdgeScrubTouchHeight)
                     .graphicsLayer { alpha = scrubFade }
-            } else {
-                Modifier
+                fullscreenControlsScrub -> Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .fullscreenControlsHorizontalInsets()
+                    .padding(bottom = FullscreenScrubBottomPad + FullscreenControlsLift)
+                    .height(FullscreenScrubTouchHeight)
+                    .graphicsLayer { alpha = scrubFade }
+                else -> Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .height(EdgeScrubTouchPadAbove * 2)
@@ -412,16 +434,23 @@ fun VideoContent(
                 enabled = interactive,
                 active = scrubActive,
                 relativeDrag = true,
-                edgeToEdge = true,
+                edgeToEdge = portraitEdgeScrub,
                 tapToSeek = false,
                 edgeTouchPadAbove = EdgeScrubTouchPadAbove,
+                trackHeight = if (fullscreenControlsScrub) FullscreenScrubTrackHeight else 4.dp,
+                touchHeight = when {
+                    portraitEdgeScrub -> EdgeScrubTouchHeight
+                    fullscreenControlsScrub -> FullscreenScrubTouchHeight
+                    else -> EdgeScrubTouchPadAbove * 2
+                },
+                knob = if (fullscreenControlsScrub) FullscreenScrubKnob else 7.dp,
+                knobDragging = if (fullscreenControlsScrub) FullscreenScrubKnobDragging else 9.dp,
                 onPreview = { state.scrubPreviewMs = it; touched() },
                 onSeek = { state.endScrubDragging(it); touched() },
                 onDraggingChanged = { dragging ->
                     if (dragging) state.beginScrubDragging()
                     else state.endScrubDragging()
                 },
-                touchHeight = if (portraitEdgeScrub) EdgeScrubTouchHeight else EdgeScrubTouchPadAbove * 2,
                 modifier = scrubModifier.zIndex(10f),
             )
         }
@@ -430,7 +459,16 @@ fun VideoContent(
                 Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .padding(bottom = EdgeScrubTimeRowBottomPad)
+                    .then(
+                        if (fullscreenControlsScrub) Modifier.fullscreenControlsHorizontalInsets() else Modifier,
+                    )
+                    .padding(
+                        bottom = if (fullscreenControlsScrub) {
+                            FullscreenTimeRowBottomFromEdge
+                        } else {
+                            EdgeScrubTimeRowBottomPad
+                        },
+                    )
                     .height(EdgeScrubTimeRowHeight)
                     .zIndex(11f),
                 contentAlignment = Alignment.Center,
@@ -872,6 +910,33 @@ internal val EdgeScrubTouchHeight = EdgeScrubTouchPadAbove + EdgeScrubTouchPadBe
 /** Current / total row above the bar (fullscreen chip sets the row height). */
 private val EdgeScrubTimeRowBottomPad = EdgeScrubTouchPadAbove + 6.dp
 private val EdgeScrubTimeRowHeight = 34.dp
+/** Landscape fullscreen: shared horizontal inset for the time row and scrubber. */
+private val FullscreenControlsHorizontalPad = 20.dp
+
+/** Equal left/right margin: notch cutout often hits one side only — balance to the larger inset. */
+private fun Modifier.fullscreenControlsHorizontalInsets(): Modifier = composed {
+    val layoutDirection = LocalLayoutDirection.current
+    val cutout = WindowInsets.displayCutout.asPaddingValues()
+    val balanced = maxOf(
+        cutout.calculateStartPadding(layoutDirection),
+        cutout.calculateEndPadding(layoutDirection),
+    )
+    padding(
+        start = balanced + FullscreenControlsHorizontalPad,
+        end = balanced + FullscreenControlsHorizontalPad,
+    )
+}
+private val FullscreenControlsVerticalPad = 8.dp
+private val FullscreenScrubTrackHeight = 4.dp
+private val FullscreenScrubTouchHeight = 30.dp
+private val FullscreenScrubBottomPad = 6.dp
+private val FullscreenControlsLift = 10.dp
+/** Bottom of the time row from the video edge (controls overlay includes [FullscreenControlsVerticalPad]). */
+private val FullscreenTimeRowBottomFromEdge: Dp
+    get() = FullscreenControlsVerticalPad + EdgeScrubTimeRowBottomPad + FullscreenControlsLift
+/** Knob radii (not diameters). */
+private val FullscreenScrubKnob = 5.dp
+private val FullscreenScrubKnobDragging = 6.dp
 
 /**
  * Scrubber: buffered and played tracks, optional knob. On the video stage the bar is pinned to
@@ -917,17 +982,19 @@ private fun Scrubber(
     )
     val knobRadius by animateDpAsState(if (dragging) knobDragging else knob, label = "knob")
     val h = if (edgeToEdge) 2.dp else trackHeight
+    val insetEnds = !edgeToEdge
     Canvas(
         modifier = modifier
             .fillMaxWidth()
             .height(touchHeight)
-            .pointerInput(enabled, durationMs, relativeDrag, tapToSeek) {
+            .pointerInput(enabled, durationMs, relativeDrag, tapToSeek, edgeToEdge, trackHeight) {
                 if (!enabled || durationMs <= 0) return@pointerInput
                 val slop = viewConfiguration.touchSlop * 0.35f
+                val endInset = if (edgeToEdge) 0f else (trackHeight / 2).toPx()
                 awaitEachGesture {
                     val down = awaitFirstDown()
                     down.consume()
-                    val width = size.width.toFloat().coerceAtLeast(1f)
+                    val width = (size.width - endInset * 2f).coerceAtLeast(1f)
                     var fraction = (currentPositionMs.toFloat() / duration).coerceIn(0f, 1f)
                     var dragged = false
                     var slopAccum = Offset.Zero
@@ -940,7 +1007,7 @@ private fun Scrubber(
                         if (!change.pressed) {
                             if (dragged) onSeek((fraction * durationMs).toLong())
                             else if (tapToSeek) {
-                                val x = change.position.x.coerceIn(0f, width)
+                                val x = (change.position.x - endInset).coerceIn(0f, width)
                                 onSeek((x / width * durationMs).toLong())
                             }
                             dragFraction = null
@@ -960,7 +1027,7 @@ private fun Scrubber(
                             fraction = if (relativeDrag) {
                                 (fraction + delta.x / width).coerceIn(0f, 1f)
                             } else {
-                                (change.position.x / width).coerceIn(0f, 1f)
+                                ((change.position.x - endInset) / width).coerceIn(0f, 1f)
                             }
                             dragFraction = fraction
                             onPreview((fraction * durationMs).toLong())
@@ -974,16 +1041,21 @@ private fun Scrubber(
         val centerY = if (edgeToEdge) edgeTouchPadAbove.toPx() else size.height / 2f
         val y = centerY - trackH / 2f
         val r = CornerRadius(trackH / 2f)
-        drawRoundRect(track, Offset(0f, y), Size(size.width, trackH), r)
-        drawRoundRect(buffered, Offset(0f, y), Size(size.width * bufferedFraction, trackH), r)
-        drawRoundRect(playedColor, Offset(0f, y), Size(size.width * playedFraction, trackH), r)
+        val endInset = if (insetEnds) trackH / 2f else 0f
+        val trackW = size.width - endInset * 2f
+        val left = endInset
+        drawRoundRect(track, Offset(left, y), Size(trackW, trackH), r)
+        drawRoundRect(buffered, Offset(left, y), Size(trackW * bufferedFraction, trackH), r)
+        drawRoundRect(playedColor, Offset(left, y), Size(trackW * playedFraction.coerceAtLeast(0f), trackH), r)
         segments.forEach { seg ->
-            val x0 = size.width * (seg.startMs.toFloat() / duration).coerceIn(0f, 1f)
-            val x1 = size.width * (seg.endMs.toFloat() / duration).coerceIn(0f, 1f)
-            if (x1 > x0) drawRect(seg.category.color, Offset(x0, y), Size(x1 - x0, trackH))
+            val x0 = left + trackW * (seg.startMs.toFloat() / duration).coerceIn(0f, 1f)
+            val x1 = left + trackW * (seg.endMs.toFloat() / duration).coerceIn(0f, 1f)
+            if (x1 > x0) drawRoundRect(seg.category.color, Offset(x0, y), Size(x1 - x0, trackH), r)
         }
         if (chromeActive) {
-            drawCircle(playedColor, radius = knobRadius.toPx(), center = Offset(size.width * playedFraction, centerY))
+            val knobR = knobRadius.toPx()
+            val knobX = (left + trackW * playedFraction).coerceIn(left + knobR, left + trackW - knobR)
+            drawCircle(playedColor, radius = knobR, center = Offset(knobX, centerY))
         }
     }
 }

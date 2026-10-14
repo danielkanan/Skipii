@@ -37,6 +37,8 @@ object Motion {
     const val ControlsHideMs = 2_000L
     /** Scrub thumb, track tint, and controls hide/show together. */
     const val ScrubChromeMs = 220
+    /** Press-and-hold on the video before temporary 2× playback starts. */
+    const val HoldSpeedMs = 580L
 }
 
 /** True when animations are off system-wide; all motion collapses to instant switches. */

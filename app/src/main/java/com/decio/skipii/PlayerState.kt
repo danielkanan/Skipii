@@ -65,12 +65,16 @@ class PlayerState(private val scope: CoroutineScope) {
     var speed by mutableFloatStateOf(1f)
         private set
     var speedPanelOpen by mutableStateOf(false)
+    /** Finger is held for temporary 2× playback. */
+    var holdSpeedActive by mutableStateOf(false)
+        internal set
     /** While dragging the portrait edge scrubber; also mirrors overlay controls visibility. */
     var scrubPreviewMs by mutableStateOf<Long?>(null)
         internal set
     var scrubDragging by mutableStateOf(false)
         internal set
     private var resumePlayAfterScrub = false
+    private var speedBeforeHold: Float? = null
     var videoControlsVisible by mutableStateOf(false)
         internal set
 
@@ -153,6 +157,7 @@ class PlayerState(private val scope: CoroutineScope) {
     private var openedAt = 0L
 
     private fun show(item: VideoItem, startPlayback: Boolean) {
+        endHoldSpeed()
         openedAt = android.os.SystemClock.elapsedRealtime()
         Log.i("SkipiiTime", "open ${item.id}")
         if (startPlayback) Net.prewarmMediaConnection()
@@ -468,6 +473,24 @@ class PlayerState(private val scope: CoroutineScope) {
         scrubPreviewMs = null
         if (seekMs != null) seekTo(seekMs)
         if (resume) player?.play()
+    }
+
+    /** Hold anywhere on the video while playing → 2× until release (does not change remembered speed). */
+    fun beginHoldSpeed(): Boolean {
+        val player = controller ?: return false
+        if (scrubDragging || speedBeforeHold != null) return false
+        if (!player.isPlaying) return false
+        speedBeforeHold = player.playbackParameters.speed
+        holdSpeedActive = true
+        previewSpeed(2f)
+        return true
+    }
+
+    fun endHoldSpeed() {
+        val restore = speedBeforeHold ?: return
+        speedBeforeHold = null
+        holdSpeedActive = false
+        previewSpeed(restore)
     }
 
     /** The ruler is moving: play at [value] now (remembering waits for [commitSpeed]). */

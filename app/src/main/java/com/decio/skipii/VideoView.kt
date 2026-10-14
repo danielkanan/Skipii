@@ -1,5 +1,6 @@
 package com.decio.skipii
 
+import android.view.HapticFeedbackConstants
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
@@ -56,6 +57,7 @@ import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.ui.composed
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -102,6 +104,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
@@ -167,6 +170,7 @@ fun VideoContent(
             controlsVisible = false
             burstActive = false
             state.endScrubDragging()
+            state.endHoldSpeed()
         }
     }
     val currentInteractive by androidx.compose.runtime.rememberUpdatedState(interactive)
@@ -178,6 +182,8 @@ fun VideoContent(
         burstTaps++
     }
     val pip = LocalPictureInPicture.current
+    val view = LocalView.current
+    val currentView by rememberUpdatedState(view)
     val fullscreenControlsScrub = fullscreen && !portraitEdgeScrub
     val scrubbing = state.scrubDragging
     val scrubPreviewMs = state.scrubPreviewMs
@@ -186,6 +192,7 @@ fun VideoContent(
     }
     Box(modifier.background(Color.Black).onGloballyPositioned { pip?.videoBounds = it.boundsInWindow() }.pointerInput(state, portraitEdgeScrub) {
         val doubleTapMs = viewConfiguration.doubleTapTimeoutMillis
+        val holdSpeedMs = Motion.HoldSpeedMs
         coroutineScope {
             // Side taps show/hide controls at once; a second tap on that side inside the double-tap window seeks.
             var seekWindow: Job? = null
@@ -196,16 +203,39 @@ fun VideoContent(
                 if (portraitEdgeScrub && down.position.y >= size.height - EdgeScrubTouchPadAbove.roundToPx()) {
                     return@awaitEachGesture
                 }
-                val up = waitForUpOrCancellation() ?: return@awaitEachGesture
+                down.consume()
+                if (!currentInteractive) {
+                    waitForUpOrCancellation()
+                    currentInactiveTap()
+                    return@awaitEachGesture
+                }
+                if (state.error != null) {
+                    waitForUpOrCancellation()
+                    return@awaitEachGesture
+                }
+                val upEarly = withTimeoutOrNull(holdSpeedMs) { waitForUpOrCancellation() }
+                if (upEarly == null) {
+                    seekWindow?.cancel()
+                    if (!state.scrubDragging && state.beginHoldSpeed()) {
+                        currentView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+                        controlsVisible = false
+                        burstActive = false
+                        waitForUpOrCancellation()?.consume()
+                        state.endHoldSpeed()
+                    } else {
+                        waitForUpOrCancellation()?.consume()
+                    }
+                    return@awaitEachGesture
+                }
+                val up = upEarly
                 up.consume()
-                if (!currentInteractive) { currentInactiveTap(); return@awaitEachGesture }
                 val x = up.position.x / size.width
                 val side = if (x < 0.4f) -1 else if (x > 0.6f) 1 else 0
                 if (burstActive && side == burstSide) { seekStep(side); return@awaitEachGesture }
                 burstActive = false
                 val inSeekWindow = seekWindow?.isActive == true
                 seekWindow?.cancel()
-                if (side == 0 || state.error != null) {
+                if (side == 0) {
                     toggleControls()
                 } else if (inSeekWindow && side == pendingSide && up.uptimeMillis - pendingAt < doubleTapMs) {
                     controlsVisible = false
@@ -256,6 +286,9 @@ fun VideoContent(
         }
         if (!scrubbing) {
             SeekBurstPill(burstSide, burstSeconds, burstTaps, burstActive, fullscreen)
+        }
+        if (state.holdSpeedActive) {
+            HoldSpeedPill(Modifier.align(Alignment.TopCenter).padding(top = 12.dp).graphicsLayer { alpha = controlsAlpha() })
         }
 
         val error = state.error
@@ -621,6 +654,21 @@ fun FullscreenPlayer(state: PlayerState, onExit: () -> Unit) {
                 // A little give while dragging, so the gesture is visibly being heard.
                 translationY = if (reduced) 0f else drag * 0.35f
             },
+    )
+}
+
+@Composable
+private fun HoldSpeedPill(modifier: Modifier = Modifier) {
+    Text(
+        "2×",
+        color = Color.White,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.Black,
+        lineHeight = 13.sp,
+        modifier = modifier
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.55f))
+            .padding(horizontal = 12.dp, vertical = 4.dp),
     )
 }
 

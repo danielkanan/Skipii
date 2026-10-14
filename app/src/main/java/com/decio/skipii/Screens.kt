@@ -376,8 +376,8 @@ fun LibraryScreen(
 private fun HistoryCard(video: VideoItem, onClick: () -> Unit) {
     val menu = LocalVideoMenu.current
     Column(Modifier.width(168.dp).prefetchOnPress(video.id).pressable(pressedScale = 0.97f, onLongClick = { menu(video) }, onClick = onClick)) {
-        Box {
-            Thumbnail(video.thumbnail, Modifier.fillMaxWidth().aspectRatio(16f / 9f), radius = 20)
+        Box(Modifier.padding(horizontal = FeedVideoThumbInset)) {
+            Thumbnail(video.thumbnail, Modifier.fillMaxWidth().aspectRatio(16f / 9f), radius = FeedVideoThumbRadius)
             DurationPill(video.durationSec, Modifier.align(Alignment.BottomEnd).padding(6.dp), small = true)
         }
         Spacer(Modifier.height(7.dp))

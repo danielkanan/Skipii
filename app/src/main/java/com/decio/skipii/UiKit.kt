@@ -245,6 +245,10 @@ fun Modifier.prefetchOnPress(videoId: String): Modifier = pointerInput(videoId) 
 /** Long-pressing any video opens its options (Play next, Add to queue, …). Provided by the app shell. */
 val LocalVideoMenu = staticCompositionLocalOf<(VideoItem) -> Unit> { {} }
 
+/** Home / Subscriptions / channel uploads — slight inset + soft corners on the thumb. */
+internal val FeedVideoThumbInset = 9.dp
+internal const val FeedVideoThumbRadius = 9
+
 @Composable
 fun Thumbnail(url: String?, modifier: Modifier = Modifier, radius: Int = 22, videoId: String? = null) {
     val model = remember(url, videoId) {
@@ -322,7 +326,7 @@ fun ChannelAvatar(
     }
 }
 
-/** Full-width feed row: edge-to-edge thumbnail, then avatar + title + meta. */
+/** Full-width feed row: inset thumbnail, then avatar + title + meta. */
 @Composable
 fun VideoCard(video: VideoItem, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val c = MaterialTheme.colorScheme
@@ -334,9 +338,18 @@ fun VideoCard(video: VideoItem, onClick: () -> Unit, modifier: Modifier = Modifi
             .pressable(pressedScale = 0.97f, onLongClick = { menu(video) }, onClick = onClick)
             .padding(bottom = 16.dp),
     ) {
-        Box {
-            Thumbnail(video.thumbnail, Modifier.fillMaxWidth().aspectRatio(16f / 9f), radius = 0, videoId = video.id)
-            DurationPill(video.durationSec, Modifier.align(Alignment.BottomEnd).padding(6.dp))
+        Box(
+            Modifier
+                .padding(horizontal = FeedVideoThumbInset)
+                .clip(RoundedCornerShape(FeedVideoThumbRadius.dp)),
+        ) {
+            Thumbnail(
+                video.thumbnail,
+                Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+                radius = FeedVideoThumbRadius,
+                videoId = video.id,
+            )
+            DurationPill(video.durationSec, Modifier.align(Alignment.BottomEnd).padding(5.dp))
             ResumeBar(video.id, Modifier.align(Alignment.BottomStart))
         }
         Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
@@ -354,11 +367,11 @@ fun VideoCard(video: VideoItem, onClick: () -> Unit, modifier: Modifier = Modifi
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(1.dp))
                 Text(
                     metaLine(video.channel, video.views, video.uploaded),
                     color = c.onSurfaceVariant,
-                    fontSize = 13.sp,
+                    fontSize = 12.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )

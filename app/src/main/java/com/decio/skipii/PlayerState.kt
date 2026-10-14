@@ -65,6 +65,11 @@ class PlayerState(private val scope: CoroutineScope) {
     var speed by mutableFloatStateOf(1f)
         private set
     var speedPanelOpen by mutableStateOf(false)
+    /** While dragging the portrait edge scrubber; also mirrors overlay controls visibility. */
+    var scrubPreviewMs by mutableStateOf<Long?>(null)
+        internal set
+    var videoControlsVisible by mutableStateOf(false)
+        internal set
 
     init {
         // The service's stream recovery has no player event for its outcome: follow its state.

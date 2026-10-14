@@ -1,6 +1,7 @@
 package com.decio.skipii
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.keyframes
@@ -11,7 +12,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -59,11 +60,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -78,6 +81,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -86,6 +90,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.media3.ui.compose.PlayerSurface
 import androidx.media3.ui.compose.SURFACE_TYPE_TEXTURE_VIEW
 import kotlinx.coroutines.Job
@@ -114,12 +119,15 @@ fun VideoContent(
     /** False while the player collapses: no controls, and a tap calls [onInactiveTap]. */
     interactive: Boolean = true,
     onInactiveTap: () -> Unit = {},
+    /** Portrait: seam scrubber on the morphing stage (not a screen-fixed overlay). */
+    portraitEdgeScrub: Boolean = false,
 ) {
     // Hidden until the video is tapped: opening the player (from the mini-player too) and
     // rotating in or out of fullscreen never pop the controls up.
     var controlsVisible by remember { mutableStateOf(false) }
     var touchedAt by remember { mutableLongStateOf(0L) }
     fun touched() { touchedAt = System.nanoTime() }
+    SideEffect { state.videoControlsVisible = controlsVisible }
     LaunchedEffect(controlsVisible, state.isPlaying, touchedAt) {
         if (controlsVisible && state.isPlaying) {
             delay(Motion.ControlsHideMs)
@@ -149,12 +157,6 @@ fun VideoContent(
     LaunchedEffect(burstTaps) {
         if (burstTaps > 0 && !reduced) nudge.animateTo(0f, keyframes { durationMillis = 440; 1f at 130 })
     }
-    val peekAlpha by animateFloatAsState(
-        targetValue = if (burstActive) 1f else 0f,
-        animationSpec = if (reduced) tween(0) else tween(200, easing = Motion.Emphasized),
-        label = "seekPeek",
-    )
-
     LaunchedEffect(interactive) { if (!interactive) { controlsVisible = false; burstActive = false } }
     val currentInteractive by androidx.compose.runtime.rememberUpdatedState(interactive)
     val currentInactiveTap by androidx.compose.runtime.rememberUpdatedState(onInactiveTap)
@@ -165,7 +167,7 @@ fun VideoContent(
         burstTaps++
     }
     val pip = LocalPictureInPicture.current
-    Box(modifier.background(Color.Black).onGloballyPositioned { pip?.videoBounds = it.boundsInWindow() }.pointerInput(state) {
+    Box(modifier.background(Color.Black).onGloballyPositioned { pip?.videoBounds = it.boundsInWindow() }.pointerInput(state, portraitEdgeScrub) {
         val doubleTapMs = viewConfiguration.doubleTapTimeoutMillis
         coroutineScope {
             // Side taps show/hide controls at once; a second tap on that side inside the double-tap window seeks.
@@ -173,7 +175,10 @@ fun VideoContent(
             var pendingSide = 0
             var pendingAt = 0L
             awaitEachGesture {
-                awaitFirstDown()
+                val down = awaitFirstDown()
+                if (portraitEdgeScrub && down.position.y >= size.height - EdgeScrubTouchPadAbove.roundToPx()) {
+                    return@awaitEachGesture
+                }
                 val up = waitForUpOrCancellation() ?: return@awaitEachGesture
                 up.consume()
                 if (!currentInteractive) { currentInactiveTap(); return@awaitEachGesture }
@@ -220,12 +225,6 @@ fun VideoContent(
                 Thumbnail(state.current?.thumbnail, Modifier.fillMaxSize(), radius = 0)
                 LocalVideoSurface.current(Modifier.fillMaxSize())
             }
-            // Where the burst has got to, while the controls (and their scrubber) are hidden.
-            Canvas(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(3.dp).graphicsLayer { alpha = peekAlpha }) {
-                drawRect(Color.White.copy(alpha = 0.28f))
-                val played = if (state.durationMs > 0) (state.positionMs.toFloat() / state.durationMs).coerceIn(0f, 1f) else 0f
-                drawRect(Color.White, size = Size(size.width * played, size.height))
-            }
         }
         SeekBurstPill(burstSide, burstSeconds, burstTaps, burstActive, fullscreen)
 
@@ -244,7 +243,7 @@ fun VideoContent(
         // The Ask pill stays reachable while the controls are hidden.
         if (!controlsVisible) {
             state.askSegment?.let { segment ->
-                SkipSegmentPill(segment, enabled = true, modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp)) {
+                SkipSegmentPill(segment, enabled = true, modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, top = 12.dp, bottom = 40.dp)) {
                     touched(); state.skipSegment(segment)
                 }
             }
@@ -326,10 +325,14 @@ fun VideoContent(
                         touched(); state.seekBy(10_000)
                     }
                 }
-                Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(start = 14.dp, end = 8.dp, bottom = 6.dp)) {
-                    var scrubPreview by remember { mutableStateOf<Long?>(null) }
+                Column(
+                    Modifier
+                        .align(Alignment.BottomStart)
+                        .fillMaxWidth()
+                        .padding(start = 14.dp, end = 8.dp, bottom = EdgeScrubTouchPadAbove + 6.dp),
+                ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(formatDuration(scrubPreview ?: state.positionMs), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text(formatDuration(state.scrubPreviewMs ?: state.positionMs), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         Text(
                             " / " + formatDuration(state.durationMs),
                             color = Color.White.copy(alpha = 0.72f), fontSize = 12.sp, fontWeight = FontWeight.Bold,
@@ -348,17 +351,44 @@ fun VideoContent(
                             tinted = false,
                         ) { onToggleFullscreen() }
                     }
-                    Scrubber(
-                        segments = if (SponsorBlock.enabled) state.segments.filter { it.action != SponsorBlock.Action.Off } else emptyList(),
-                        positionMs = state.positionMs,
-                        bufferedMs = state.bufferedMs,
-                        durationMs = state.durationMs,
-                        enabled = enabled,
-                        onPreview = { scrubPreview = it; touched() },
-                        onSeek = { scrubPreview = null; state.seekTo(it); touched() },
-                    )
                 }
             }
+        }
+        if (state.error == null) {
+            val scrubActive = controlsVisible && interactive
+            val morphFade = controlsAlpha()
+            val segments = if (SponsorBlock.enabled) state.segments.filter { it.action != SponsorBlock.Action.Off } else emptyList()
+            val scrubModifier = if (portraitEdgeScrub) {
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    // Fixed on the stage/page seam; the morph layer moves it with the video.
+                    .offset(y = EdgeScrubTouchPadBelow)
+                    .height(EdgeScrubTouchHeight)
+                    .graphicsLayer { alpha = morphFade }
+            } else {
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(EdgeScrubTouchPadAbove * 2)
+                    .graphicsLayer { alpha = morphFade }
+            }
+            Scrubber(
+                segments = segments,
+                positionMs = state.positionMs,
+                bufferedMs = state.bufferedMs,
+                durationMs = state.durationMs,
+                enabled = interactive,
+                active = scrubActive,
+                relativeDrag = true,
+                edgeToEdge = true,
+                tapToSeek = false,
+                edgeTouchPadAbove = EdgeScrubTouchPadAbove,
+                onPreview = { state.scrubPreviewMs = it; touched() },
+                onSeek = { state.scrubPreviewMs = null; state.seekTo(it); touched() },
+                touchHeight = if (portraitEdgeScrub) EdgeScrubTouchHeight else EdgeScrubTouchPadAbove * 2,
+                modifier = scrubModifier.zIndex(10f),
+            )
         }
     }
 }
@@ -780,9 +810,17 @@ fun MorphPlayButton(
     }
 }
 
+private val ScrubberActiveRed = Color(0xFFFF0033)
+
+/** Touch above the bar (on the video) and below it (into the page — the list must not steal this). */
+internal val EdgeScrubTouchPadAbove = 14.dp
+internal val EdgeScrubTouchPadBelow = 36.dp
+internal val EdgeScrubTouchHeight = EdgeScrubTouchPadAbove + EdgeScrubTouchPadBelow
+
 /**
- * Scrubber: buffered and played tracks, a knob that grows while dragging. Thin and white on
- * the video; the audio-only stage passes its own colors and sizes.
+ * Scrubber: buffered and played tracks, optional knob. On the video stage the bar is pinned to
+ * the bottom edge (full width); [active] turns the played track red and shows the knob. Dragging
+ * can follow the finger ([relativeDrag] false) or slide from where you started (true).
  */
 @Composable
 private fun Scrubber(
@@ -793,57 +831,97 @@ private fun Scrubber(
     enabled: Boolean,
     onPreview: (Long) -> Unit,
     onSeek: (Long) -> Unit,
+    modifier: Modifier = Modifier,
+    active: Boolean = true,
+    relativeDrag: Boolean = false,
+    edgeToEdge: Boolean = false,
+    edgeTouchPadAbove: Dp = EdgeScrubTouchPadAbove,
+    tapToSeek: Boolean = true,
     track: Color = Color.White.copy(alpha = 0.3f),
     buffered: Color = Color.White.copy(alpha = 0.5f),
     played: Color = Color.White,
     trackHeight: Dp = 4.dp,
+    touchHeight: Dp = 24.dp,
     knob: Dp = 7.dp,
     knobDragging: Dp = 9.dp,
 ) {
     var dragFraction by remember { mutableStateOf<Float?>(null) }
+    val currentPositionMs by rememberUpdatedState(positionMs)
     val duration = durationMs.coerceAtLeast(1L)
     val playedFraction = dragFraction ?: (positionMs.toFloat() / duration).coerceIn(0f, 1f)
     val bufferedFraction = (bufferedMs.toFloat() / duration).coerceIn(0f, 1f)
-    val knobRadius by animateDpAsState(if (dragFraction != null) knobDragging else knob, label = "knob")
+    val dragging = dragFraction != null
+    // Controls visible, or a lone drag while they're hidden: red + thumb, no overlay.
+    val chromeActive = active || dragging
+    val playedColor by animateColorAsState(
+        if (chromeActive) ScrubberActiveRed else played,
+        tween(160, easing = Motion.Emphasized),
+        label = "scrubPlayed",
+    )
+    val knobRadius by animateDpAsState(if (dragging) knobDragging else knob, label = "knob")
+    val h = if (edgeToEdge) 2.dp else trackHeight
     Canvas(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .height(24.dp)
-            .pointerInput(enabled, durationMs) {
+            .height(touchHeight)
+            .pointerInput(enabled, durationMs, relativeDrag, tapToSeek) {
                 if (!enabled || durationMs <= 0) return@pointerInput
-                detectTapGestures { offset -> onSeek((offset.x / size.width * durationMs).toLong()) }
-            }
-            .pointerInput(enabled, durationMs) {
-                if (!enabled || durationMs <= 0) return@pointerInput
-                detectHorizontalDragGestures(
-                    onDragStart = { offset ->
-                        dragFraction = (offset.x / size.width).coerceIn(0f, 1f)
-                        onPreview((dragFraction!! * durationMs).toLong())
-                    },
-                    onDragEnd = {
-                        dragFraction?.let { onSeek((it * durationMs).toLong()) }
-                        dragFraction = null
-                    },
-                    onDragCancel = { dragFraction = null },
-                ) { change, _ ->
-                    change.consume()
-                    dragFraction = (change.position.x / size.width).coerceIn(0f, 1f)
-                    onPreview((dragFraction!! * durationMs).toLong())
+                val slop = viewConfiguration.touchSlop * 0.35f
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    down.consume()
+                    val width = size.width.toFloat().coerceAtLeast(1f)
+                    var fraction = (currentPositionMs.toFloat() / duration).coerceIn(0f, 1f)
+                    var dragged = false
+                    var slopAccum = Offset.Zero
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) {
+                            if (dragged) onSeek((fraction * durationMs).toLong())
+                            else if (tapToSeek) {
+                                val x = change.position.x.coerceIn(0f, width)
+                                onSeek((x / width * durationMs).toLong())
+                            }
+                            dragFraction = null
+                            break
+                        }
+                        val delta = change.positionChange()
+                        if (!dragged) {
+                            slopAccum += delta
+                            if (slopAccum.getDistance() < slop) continue
+                            dragged = true
+                            fraction = (currentPositionMs.toFloat() / duration).coerceIn(0f, 1f)
+                            dragFraction = fraction
+                            onPreview((fraction * durationMs).toLong())
+                        } else {
+                            fraction = if (relativeDrag) {
+                                (fraction + delta.x / width).coerceIn(0f, 1f)
+                            } else {
+                                (change.position.x / width).coerceIn(0f, 1f)
+                            }
+                            dragFraction = fraction
+                            onPreview((fraction * durationMs).toLong())
+                        }
+                        change.consume()
+                    }
                 }
             },
     ) {
-        val trackH = trackHeight.toPx()
-        val y = size.height / 2f - trackH / 2f
+        val trackH = h.toPx()
+        val centerY = if (edgeToEdge) edgeTouchPadAbove.toPx() else size.height / 2f
+        val y = centerY - trackH / 2f
         val r = CornerRadius(trackH / 2f)
         drawRoundRect(track, Offset(0f, y), Size(size.width, trackH), r)
         drawRoundRect(buffered, Offset(0f, y), Size(size.width * bufferedFraction, trackH), r)
-        drawRoundRect(played, Offset(0f, y), Size(size.width * playedFraction, trackH), r)
-        // SponsorBlock segments, in their category colors, over the track.
+        drawRoundRect(playedColor, Offset(0f, y), Size(size.width * playedFraction, trackH), r)
         segments.forEach { seg ->
             val x0 = size.width * (seg.startMs.toFloat() / duration).coerceIn(0f, 1f)
             val x1 = size.width * (seg.endMs.toFloat() / duration).coerceIn(0f, 1f)
             if (x1 > x0) drawRect(seg.category.color, Offset(x0, y), Size(x1 - x0, trackH))
         }
-        drawCircle(played, radius = knobRadius.toPx(), center = Offset(size.width * playedFraction, size.height / 2f))
+        if (chromeActive) {
+            drawCircle(playedColor, radius = knobRadius.toPx(), center = Offset(size.width * playedFraction, centerY))
+        }
     }
 }

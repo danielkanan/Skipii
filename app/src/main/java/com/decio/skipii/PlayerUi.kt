@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -170,14 +171,18 @@ fun PlayerScreen(
         ActionMessage(state, Modifier.align(Alignment.BottomCenter).zIndex(1f).padding(bottom = bottom + 24.dp))
         Column(Modifier.fillMaxSize()) {
             Spacer(Modifier.height(top + StageTopGap))
-            // Pinned: the video stays put while the details scroll beneath it.
-            VideoStage(state, morph, onCollapse, onFullscreen, interactive)
+            // Pinned: the video stays put while the details scroll beneath it. Sit above the
+            // details list so the bottom scrubber/thumb aren't covered at the seam.
+            Box(Modifier.zIndex(2f)) {
+                VideoStage(state, morph, onCollapse, onFullscreen, interactive)
+            }
             // While collapsing the details are invisible anyway; leaving them out keeps them
             // from catching touches meant for the mini-player.
             if (!showDetails) Spacer(Modifier.weight(1f)) else
             LazyColumn(
                 modifier = Modifier
                     .weight(1f)
+                    .zIndex(0f)
                     .nestedScroll(morph.nestedScroll)
                     .graphicsLayer {
                         // The details ride along under the video's bottom edge (so they never
@@ -185,7 +190,11 @@ fun PlayerScreen(
                         val p = morph.progress.value
                         alpha = ramp(p, DetailsFadeStart)
                         val g = morph.geometry
-                        translationY = if (g != null) lerpF(g.miniThumb.bottom - g.stage.bottom, 0f, p) else 0f
+                        translationY = if (g != null && p < 0.98f) {
+                            lerpF(g.miniThumb.bottom - g.stage.bottom, 0f, p)
+                        } else {
+                            0f
+                        }
                     },
                 contentPadding = PaddingValues(bottom = bottom + 32.dp),
             ) {
@@ -348,7 +357,8 @@ private fun VideoStage(state: PlayerState, morph: PlayerMorph, onCollapse: () ->
             } else {
                 shape = RoundedCornerShape(StageRadius)
             }
-            clip = true
+            // Morph shape clips the stage; keep clip off so the seam scrub/thumb aren't cropped on collapse.
+            clip = false
             // Only while it floats mid-morph; landed, it is a flat edge-to-edge rectangle.
             shadowElevation = 14.dp.toPx() * (1f - p).coerceIn(0f, 1f)
             ambientShadowColor = Color.Black.copy(alpha = 0.25f)
@@ -397,6 +407,7 @@ private fun VideoStage(state: PlayerState, morph: PlayerMorph, onCollapse: () ->
             onCollapse = onCollapse,
             onToggleFullscreen = onFullscreen,
             controlsAlpha = controlsAlpha,
+            portraitEdgeScrub = true,
             modifier = stage,
         )
     }

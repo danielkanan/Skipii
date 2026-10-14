@@ -153,7 +153,7 @@ fun ChannelScreen(state: ChannelState, contentPadding: PaddingValues, onBack: ()
                 item(key = "header") {
                     Column(Modifier.padding(horizontal = 16.dp)) {
                         if (d.banner != null) {
-                            Thumbnail(d.banner, Modifier.fillMaxWidth().aspectRatio(5.6f), radius = 22)
+                            Thumbnail(d.banner, Modifier.fillMaxWidth().aspectRatio(5.6f), radius = FeedVideoThumbRadius)
                             Spacer(Modifier.height(16.dp))
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {

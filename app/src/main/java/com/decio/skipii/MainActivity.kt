@@ -148,6 +148,7 @@ fun SkipiiApp() {
     var openChannel by remember { mutableStateOf<String?>(null) }
     var openAllSubscriptions by remember { mutableStateOf(false) }
     var openSearch by remember { mutableStateOf(false) }
+    LaunchedEffect(openSearch) { if (openSearch) search.reset() }
     // Kept after closing so the page can slide out with its content.
     var channelState by remember { mutableStateOf<ChannelState?>(null) }
     val playlistFeed = remember(openPlaylist?.id) { openPlaylist?.let { lib.playlistFeed(it.id) } }

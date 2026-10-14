@@ -47,6 +47,7 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -486,12 +487,31 @@ class SearchState(private val scope: CoroutineScope) {
     private var job: Job? = null
     private var suggestJob: Job? = null
 
+    fun reset() {
+        job?.cancel()
+        suggestJob?.cancel()
+        query = ""
+        submitted = ""
+        results = emptyList()
+        suggestions = emptyList()
+        suggestionsLoading = false
+        loading = false
+        error = null
+    }
+
     fun updateQuery(text: String) {
         query = text
         suggestJob?.cancel()
         if (text.isBlank()) {
             suggestions = emptyList()
             suggestionsLoading = false
+            if (submitted.isNotEmpty() || results.isNotEmpty() || error != null || loading) {
+                submitted = ""
+                results = emptyList()
+                error = null
+                loading = false
+                job?.cancel()
+            }
             return
         }
         suggestJob = scope.launch {
@@ -536,11 +556,15 @@ fun SearchScreen(
     val focus = LocalFocusManager.current
     val view = LocalView.current
     val searchFocus = remember { FocusRequester() }
-    LaunchedEffect(Unit) {
-        delay(80)
-        runCatching { searchFocus.requestFocus() }
-        keyboard?.show()
+    val scope = rememberCoroutineScope()
+    fun showSearchKeyboard() {
+        scope.launch {
+            delay(80)
+            runCatching { searchFocus.requestFocus() }
+            keyboard?.show()
+        }
     }
+    LaunchedEffect(Unit) { showSearchKeyboard() }
     // Search and Enter both dismiss the keyboard — every field, every time. A hide issued
     // while the key event is still being dispatched can be undone by the IME, so the
     // window-level hide is posted to run after it.
@@ -600,7 +624,10 @@ fun SearchScreen(
                     }
                     if (state.query.isNotEmpty()) {
                         Box(
-                            modifier = Modifier.size(40.dp).pressable { state.updateQuery("") },
+                            modifier = Modifier.size(40.dp).pressable {
+                                state.updateQuery("")
+                                showSearchKeyboard()
+                            },
                             contentAlignment = Alignment.Center,
                         ) { Icon(Icons.Rounded.Close, "Clear", tint = c.onSurfaceVariant, modifier = Modifier.size(20.dp)) }
                     }

@@ -96,8 +96,6 @@ val SunnyShape = LobedShape(lobes = 8, depth = 0.05f)
 // ── Header ─────────────────────────────────────────────────────────────────────
 
 private val ScreenHeaderHorizontal = 16.dp
-/** Home header: logo tile height; wordmark matches this. */
-private val BrandHeaderMarkHeight = 23.dp
 
 /** Seamless header: same surface as the page, heavy title, round 44 dp actions. */
 @Composable
@@ -116,18 +114,15 @@ fun ScreenHeader(
     ) {
         if (brandMark) {
             BrandMark()
-            Spacer(Modifier.width(7.dp))
+            Spacer(Modifier.width(9.dp))
         }
         Text(
             text = title,
-            modifier = Modifier
-                .weight(1f)
-                .then(if (brandMark) Modifier.height(BrandHeaderMarkHeight) else Modifier),
+            modifier = Modifier.weight(1f),
             fontFamily = RoundedHeavy,
             fontWeight = FontWeight.ExtraBold,
-            fontSize = if (brandMark) 19.sp else 31.sp,
-            lineHeight = if (brandMark) BrandHeaderMarkHeight.value.sp else TextUnit.Unspecified,
-            letterSpacing = if (brandMark) (-0.85).sp else (-1.3).sp,
+            fontSize = 31.sp,
+            letterSpacing = (-1.3).sp,
             maxLines = 1,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { actions() }
@@ -159,12 +154,12 @@ fun BrandMark() {
     val c = MaterialTheme.colorScheme
     Box(
         modifier = Modifier
-            .size(width = BrandHeaderMarkHeight * (4f / 3f), height = BrandHeaderMarkHeight)
-            .clip(RoundedCornerShape(8.dp))
+            .size(width = 40.dp, height = 30.dp)
+            .clip(RoundedCornerShape(11.dp))
             .background(Brush.linearGradient(listOf(c.primary, c.primary.copy(alpha = 0.82f)))),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(Icons.Rounded.FastForward, contentDescription = null, tint = c.onPrimary, modifier = Modifier.size(15.dp))
+        Icon(Icons.Rounded.FastForward, contentDescription = null, tint = c.onPrimary, modifier = Modifier.size(20.dp))
     }
 }
 

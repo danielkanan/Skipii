@@ -129,6 +129,12 @@ motion standard) and the approved mockup `docs/design/mockup.html` (open in a br
   YPC/MEDIA badge (old renderers) or, in lockups, a content-rating badge (R, TV-MA…) or a
   BADGE_COMMERCE offer ("Try now"). Normal uploads use BADGE_COMMERCE only for "Fundraiser" — keep
   that exception (next.json fixture). Tested by `moviesDropped` (movies.json, HBO Max's channel page).
+- 0.5.21 (2026-10-15): Search tab — query suggestions (debounced), submit to NewPipe search, results
+  kept in `SearchState` across tab switches; hold on the playing video ~580 ms → temporary 2× (`beginHoldSpeed`,
+  does not change remembered ruler speed); drag-to-scrub on portrait + fullscreen scrubber (knob grows while
+  dragging, fullscreen scrub hidden until controls or a drag); ultrawide streams label by tier (1080p) not raw
+  pixel height (`StreamSelection` / quality pill); channel + subscriptions metadata/UX polish; library/card/channel
+  thumbnail corner radius aligned.
 - 0.5.20 (2026-10-13, Derek approved mockup "Option B v2" in Drive): speed + audio-only buttons after
   Save (separate, 16 dp corners; signed out they're the whole row). Speed (`PlaybackSpeed`, PlaybackModes.kt):
   0.5–3× in 0.05 steps from a flickable ruler (`SpeedPanel.kt`, 12 dp per step, momentum then settles on a
